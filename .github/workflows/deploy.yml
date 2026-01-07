@@ -23,13 +23,13 @@ jobs:
       - name: Build project
         run: npm run build
 
-      - name: Upload dist to Hostinger via SFTP
-        uses: appleboy/scp-action@v0.1.7
+      - name: Upload dist to Hostinger via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          host: ${{ secrets.HOSTINGER_HOST }}
+          server: ${{ secrets.HOSTINGER_HOST }}
           username: ${{ secrets.HOSTINGER_USER }}
           password: ${{ secrets.HOSTINGER_PASS }}
-          port: 22
-          source: "dist/*"
-          target: ${{ secrets.HOSTINGER_TARGET }}
-          strip_components: 1
+          local-dir: dist/
+          server-dir: ${{ secrets.HOSTINGER_TARGET }}/
+
+
