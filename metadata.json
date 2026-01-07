@@ -1,0 +1,7 @@
+{
+  "name": "TimeFlow - Pro Time Tracking",
+  "description": "A high-performance time management and tracking application designed for professional teams, featuring AI-powered productivity insights and real-time activity monitoring.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
