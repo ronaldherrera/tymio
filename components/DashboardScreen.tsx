@@ -1586,7 +1586,7 @@ const DashboardScreen: React.FC = () => {
                   type="button"
                   disabled={!canBreakStart && !canBreakEnd}
                   onClick={() => {
-                     // Toggle lógico
+                     // Toggle lógico 
                      if (canBreakStart) setEntryType("break-start");
                      else if (canBreakEnd) setEntryType("break-end");
                   }}
