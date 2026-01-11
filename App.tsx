@@ -1,10 +1,12 @@
 
 import React, { useState } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import SigninScreen from "./components/SigninScreen";
 import LoginScreen from './components/LoginScreen';
 import DashboardScreen from './components/DashboardScreen';
 import ProfileScreen from './components/ProfileScreen';
 import HistoryScreen from './components/HistoryScreen';
+
 
 export const AppContext = React.createContext<{
   user: any;
@@ -32,6 +34,7 @@ const App: React.FC = () => {
     <AppContext.Provider value={{ user, setUser, isLoggedIn, setIsLoggedIn }}>
       <HashRouter>
         <Routes>
+          <Route path="/signin" element={<SigninScreen />} />
           <Route path="/" element={isLoggedIn ? <Navigate to="/dashboard" /> : <LoginScreen />} />
           <Route path="/dashboard" element={isLoggedIn ? <DashboardScreen /> : <Navigate to="/" />} />
           <Route path="/profile" element={isLoggedIn ? <ProfileScreen /> : <Navigate to="/" />} />

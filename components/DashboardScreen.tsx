@@ -1,26 +1,258 @@
+/**
+ * DashboardScreen.tsx (arreglado)
+ *
+ * Cambios clave:
+ * - Elimina duplicado de lastOthersEntry (había 2 useMemo con mismo nombre).
+ * - lastOthersEntry tipado: useMemo<TimeEntry | null>()
+ * - Quita dependencia de eventTimeMs antes de declararse.
+ * - Botones "Otros" del modal con type="button" + disabled + estilo opaco.
+ */
 
-import React, { useState, useEffect, useContext, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { AppContext } from '../App';
+import React, { useEffect, useMemo, useState, useContext } from "react";
+import { useNavigate } from "react-router-dom";
+import { AppContext } from "../App";
+import { supabase } from "../services/supabase";
+
+type EntryType =
+  | "clock-in"
+  | "clock-out"
+  | "break-start"
+  | "break-end"
+  | "others-in"
+  | "others-out";
+
+type TimeEntry = {
+  id: string;
+  user_id: string;
+  // Nuevo: fecha/hora REAL del evento (la que el usuario marca)
+  occurred_at: string | null; // timestamptz ISO
+
+  // Legacy (para compatibilidad si ya existían registros)
+  date?: string | null;
+  entry_time?: string | null;
+  entry_type: EntryType | string | null;
+  description: string | null;
+  minutes?: number | null; // ya no lo usamos
+
+  created_at: string;
+};
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+const nowHHMM = () => {
+  const d = new Date();
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
+
+const startOfWeekMonday = (d: Date) => {
+  const date = new Date(d);
+  const day = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - day);
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const startOfYear = (d: Date) => {
+  const date = new Date(d.getFullYear(), 0, 1);
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const minutesToLabel = (mins: number) => {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h <= 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+};
+
+const saveButtonClasses = (type: EntryType) => {
+  switch (type) {
+    case "clock-in":
+      return "bg-primary shadow-primary/25";
+    case "clock-out":
+      return "bg-slate-600 shadow-slate-600/25";
+    case "break-start":
+      return "bg-amber-500 shadow-amber-500/25";
+    case "break-end":
+      return "bg-emerald-500 shadow-emerald-500/25";
+    case "others-in":
+    case "others-out":
+      return "bg-pink-500 shadow-pink-500/25";
+    default:
+      return "bg-primary shadow-primary/25";
+  }
+};
+
+const typeMeta = (t: string | null | undefined) => {
+  const type = (t ?? "").toLowerCase();
+  switch (type) {
+    case "clock-in":
+      return { label: "Entrada", icon: "login", color: "primary" as const };
+    case "clock-out":
+      return { label: "Salida", icon: "logout", color: "slate" as const };
+    case "break-start":
+      return { label: "Inicio descanso", icon: "coffee", color: "amber" as const };
+    case "break-end":
+      return { label: "Fin descanso", icon: "play_arrow", color: "emerald" as const };
+    case "others-in":
+      return { label: "Entrada (Otros)", icon: "history_edu", color: "pink" as const };
+    case "others-out":
+      return { label: "Salida (Otros)", icon: "edit_note", color: "pink" as const };
+    default:
+      return { label: "Registro", icon: "schedule", color: "primary" as const };
+  }
+};
+
+const colorClasses = (c: "primary" | "slate" | "amber" | "emerald" | "pink") => {
+  switch (c) {
+    case "slate":
+      return {
+        border: "border-slate-500",
+        iconBg: "bg-slate-500/10",
+        iconText: "text-slate-200",
+      };
+    case "amber":
+      return {
+        border: "border-amber-500",
+        iconBg: "bg-amber-500/10",
+        iconText: "text-amber-200",
+      };
+    case "emerald":
+      return {
+        border: "border-emerald-500",
+        iconBg: "bg-emerald-500/10",
+        iconText: "text-emerald-200",
+      };
+    case "pink":
+      return {
+        border: "border-pink-500",
+        iconBg: "bg-pink-500/10",
+        iconText: "text-pink-200",
+      };
+    case "primary":
+    default:
+      return {
+        border: "border-primary",
+        iconBg: "bg-primary/10",
+        iconText: "text-primary",
+      };
+  }
+};
 
 const DashboardScreen: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useContext(AppContext);
-  
-  const [status, setStatus] = useState<'working' | 'break' | 'out'>('working');
-  const [sessionStartTime, setSessionStartTime] = useState<Date>(new Date(new Date().getTime() - 4.25 * 60 * 60 * 1000));
+
+  // Estado visual
+  const [status, setStatus] = useState<"working" | "break" | "out">("working");
+  const [sessionStartTime, setSessionStartTime] = useState<Date>(
+    new Date(new Date().getTime() - 4.25 * 60 * 60 * 1000)
+  );
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  // Modal manual
   const [showModal, setShowModal] = useState(false);
-  const [entryType, setEntryType] = useState<'clock-in' | 'clock-out' | 'break-start' | 'break-end' | 'others-in' | 'others-out'>('clock-in');
-  const [context, setContext] = useState('');
+  const [entryType, setEntryType] = useState<EntryType>("clock-in");
+  const [contextText, setContextText] = useState("");
+  const [entryDate, setEntryDate] = useState<string>(() => isoDate(new Date()));
+  const [entryTime, setEntryTime] = useState<string>(() => nowHHMM());
 
+  // Supabase data
+  const [todayEntries, setTodayEntries] = useState<TimeEntry[]>([]);
+
+  // --- Estado lógico según últimos fichajes (para validar acciones) ---
+  const currentMode = useMemo<"working" | "break" | "out">(() => {
+    const relevant = todayEntries.find((e) => {
+      const t = (e.entry_type ?? "").toLowerCase();
+      return t === "clock-in" || t === "clock-out" || t === "break-start" || t === "break-end";
+    });
+
+    if (!relevant) return "out";
+
+    const t = (relevant.entry_type ?? "").toLowerCase();
+    if (t === "clock-in") return "working";
+    if (t === "break-start") return "break";
+    if (t === "break-end") return "working";
+    if (t === "clock-out") return "out";
+
+    return "out";
+  }, [todayEntries]);
+
+  // Último registro de tipo "others-*" (del día cargado)
+  const lastOthersEntry = useMemo<TimeEntry | null>(() => {
+    const ms = (e: TimeEntry) => {
+      const d = e.occurred_at ? new Date(e.occurred_at) : new Date(e.created_at);
+      return d.getTime();
+    };
+
+    return (
+      [...todayEntries]
+        .filter((e) => {
+          const t = (e.entry_type ?? "").toLowerCase();
+          return t === "others-in" || t === "others-out";
+        })
+        .sort((a, b) => ms(b) - ms(a))[0] ?? null
+    );
+  }, [todayEntries]);
+
+  // --- UX: habilitar/deshabilitar botones según estado lógico ---
+  const canClockIn = currentMode === "out";
+  const canClockOut = currentMode === "working";
+  const canBreakStart = currentMode === "working";
+  const canBreakEnd = currentMode === "break";
+
+  // Regla (Otros):
+  // - Salida (Otros) solo cuando estás trabajando
+  // - Entrada (Otros) solo cuando estás fuera y el último "otros" fue "others-out"
+  const canOthersIn =
+    currentMode === "out" &&
+    !!lastOthersEntry &&
+    (lastOthersEntry.entry_type ?? "").toLowerCase() === "others-out";
+
+  const canOthersOut = currentMode === "working";
+
+  // --- UX: sincroniza el estado visual con el estado lógico (al recargar / multi-dispositivo) ---
+  useEffect(() => {
+    if (status !== currentMode) {
+      setStatus(currentMode);
+      setSessionStartTime(new Date()); // reinicia contador cuando cambia el estado real
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentMode]);
+
+  const lastEntryOfType = (type: string) => {
+    const t = type.toLowerCase();
+    return todayEntries.find((e) => (e.entry_type ?? "").toLowerCase() === t);
+  };
+
+  const eventTimeMs = (e: TimeEntry) => {
+    const d = e.occurred_at ? new Date(e.occurred_at) : new Date(e.created_at);
+    return d.getTime();
+  };
+
+  const [loadingEntries, setLoadingEntries] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!message) return;
+
+    const timer = setTimeout(() => {
+      setMessage(null);
+    }, 3000); // ⏱ 3 segundos
+
+    return () => clearTimeout(timer);
+  }, [message]);
+
+  // Reloj
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // Cronómetro
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
@@ -30,55 +262,72 @@ const DashboardScreen: React.FC = () => {
     return () => clearInterval(interval);
   }, [sessionStartTime]);
 
-  const totals = useMemo(() => ({
-    day: "4h 15m",
-    week: "38h 40m",
-    year: "1,452h 20m"
-  }), []);
-
-  const chartData = useMemo(() => [
-    { label: 'Trabajando', hours: '944h 01m', value: 65, color: '#135bec' },
-    { label: 'Descansando', hours: '217h 51m', value: 15, color: '#f59e0b' },
-    { label: 'Libre', hours: '290h 28m', value: 20, color: '#475569' },
-  ], []);
-
   const formatElapsed = (totalSeconds: number) => {
     const h = Math.floor(totalSeconds / 3600);
     const m = Math.floor((totalSeconds % 3600) / 60);
     const s = totalSeconds % 60;
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
   };
 
   const getStatusLabel = () => {
-    switch(status) {
-      case 'working': return 'Trabajando';
-      case 'break': return 'En Descanso';
-      case 'out': return 'Fuera del trabajo';
-      default: return '';
+    switch (status) {
+      case "working":
+        return "Trabajando";
+      case "break":
+        return "En Descanso";
+      case "out":
+        return "Fuera del trabajo";
+      default:
+        return "";
     }
   };
 
   const getStatusColor = () => {
-    switch(status) {
-      case 'working': return 'text-primary';
-      case 'break': return 'text-amber-500';
-      case 'out': return 'text-slate-400';
-      default: return '';
+    switch (status) {
+      case "working":
+        return "text-primary";
+      case "break":
+        return "text-amber-500";
+      case "out":
+        return "text-slate-400";
+      default:
+        return "";
     }
   };
 
-  const handleAction = (newStatus: 'working' | 'break' | 'out') => {
+  const handleAction = (newStatus: "working" | "break" | "out") => {
     setStatus(newStatus);
     setSessionStartTime(new Date());
   };
 
   const formatDateShort = (date: Date) => {
-    return date.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' });
+    return date.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" });
   };
 
   const formatTimeShort = (date: Date) => {
-    return date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
   };
+
+  // Totales (por ahora: sumamos minutos legacy si existieran; cuando eliminemos minutes ya lo quitamos)
+  const [weekTotalMins, setWeekTotalMins] = useState(0);
+  const [yearTotalMins, setYearTotalMins] = useState(0);
+
+  const totalsLabels = useMemo(() => {
+    return {
+      week: minutesToLabel(weekTotalMins),
+      year: minutesToLabel(yearTotalMins),
+    };
+  }, [weekTotalMins, yearTotalMins]);
+
+  // Chart decorativo
+  const chartData = useMemo(
+    () => [
+      { label: "Trabajando", hours: "—", value: 65, color: "#135bec" },
+      { label: "Descansando", hours: "—", value: 15, color: "#f59e0b" },
+      { label: "Libre", hours: "—", value: 20, color: "#475569" },
+    ],
+    []
+  );
 
   const renderDonut = () => {
     let cumulativePercent = 0;
@@ -88,19 +337,28 @@ const DashboardScreen: React.FC = () => {
     const strokeWidth = 18;
 
     return (
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="transform -rotate-90 drop-shadow-sm">
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        className="transform -rotate-90 drop-shadow-sm"
+      >
         {chartData.map((item, index) => {
           const startPercent = cumulativePercent;
           const endPercent = cumulativePercent + item.value;
           cumulativePercent = endPercent;
+
           const startAngle = (startPercent / 100) * 2 * Math.PI;
           const endAngle = (endPercent / 100) * 2 * Math.PI;
+
           const x1 = center + radius * Math.cos(startAngle);
           const y1 = center + radius * Math.sin(startAngle);
           const x2 = center + radius * Math.cos(endAngle);
           const y2 = center + radius * Math.sin(endAngle);
+
           const largeArcFlag = item.value > 50 ? 1 : 0;
-          const pathData = [`M ${x1} ${y1}`, `A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`].join(' ');
+          const pathData = [`M ${x1} ${y1}`, `A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`].join(" ");
+
           return (
             <path
               key={index}
@@ -117,6 +375,328 @@ const DashboardScreen: React.FC = () => {
     );
   };
 
+  const loadTodayEntries = async (dateISO: string) => {
+    setLoadingEntries(true);
+    setMessage(null);
+
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    const authUser = userData?.user;
+
+    if (userErr || !authUser) {
+      setLoadingEntries(false);
+      setMessage({ type: "error", text: "No hay sesión activa. Vuelve a iniciar sesión." });
+      return;
+    }
+
+    // Filtramos por el día del evento (occurred_at) usando rango
+    const start = new Date(`${dateISO}T00:00:00`);
+    const end = new Date(`${dateISO}T23:59:59.999`);
+
+    const { data, error } = await supabase
+      .from("time_entries")
+      .select("id,user_id,occurred_at,entry_type,description,created_at,date,entry_time,minutes")
+      .eq("user_id", authUser.id)
+      .gte("occurred_at", start.toISOString())
+      .lte("occurred_at", end.toISOString())
+      .order("occurred_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false });
+
+    setLoadingEntries(false);
+
+    if (error) {
+      setMessage({ type: "error", text: error.message });
+      return;
+    }
+
+    setTodayEntries(((data ?? []) as TimeEntry[]) ?? []);
+  };
+
+  const loadWeekYearTotals = async () => {
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    const authUser = userData?.user;
+    if (userErr || !authUser) return;
+
+    const now = new Date();
+    const weekStart = startOfWeekMonday(now);
+    const yearStart = startOfYear(now);
+
+    // Mientras minutes exista, sumamos minutes; cuando lo eliminemos, este bloque cambiará a cálculo real.
+    const { data: weekData, error: weekErr } = await supabase
+      .from("time_entries")
+      .select("minutes")
+      .eq("user_id", authUser.id)
+      .gte("occurred_at", weekStart.toISOString())
+      .lte("occurred_at", now.toISOString());
+
+    if (!weekErr) {
+      const total = (weekData ?? []).reduce((acc: number, row: any) => acc + (Number(row.minutes) || 0), 0);
+      setWeekTotalMins(total);
+    }
+
+    const { data: yearData, error: yearErr } = await supabase
+      .from("time_entries")
+      .select("minutes")
+      .eq("user_id", authUser.id)
+      .gte("occurred_at", yearStart.toISOString())
+      .lte("occurred_at", now.toISOString());
+
+    if (!yearErr) {
+      const total = (yearData ?? []).reduce((acc: number, row: any) => acc + (Number(row.minutes) || 0), 0);
+      setYearTotalMins(total);
+    }
+  };
+
+  const refreshAll = async () => {
+    const today = isoDate(new Date());
+    setEntryDate(today);
+    setEntryTime(nowHHMM());
+    await loadTodayEntries(today);
+    await loadWeekYearTotals();
+  };
+
+  useEffect(() => {
+    refreshAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // --- Helpers auth / validación robusta (a prueba de multi pestaña / multi dispositivo) ---
+  const getAuthUser = async () => {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data?.user) return { user: null as any, error: error ?? new Error("No user") };
+    return { user: data.user, error: null };
+  };
+
+  const relevantTypes = ["clock-in", "clock-out", "break-start", "break-end"] as const;
+  type RelevantType = (typeof relevantTypes)[number];
+
+  const fetchLastRelevantBefore = async (userId: string, occurredAtISO: string) => {
+    const { data, error } = await supabase
+      .from("time_entries")
+      .select("id, entry_type, occurred_at, created_at")
+      .eq("user_id", userId)
+      .in("entry_type", [...relevantTypes])
+      .lte("occurred_at", occurredAtISO)
+      .order("occurred_at", { ascending: false })
+      .limit(1);
+
+    if (error) return { row: null as any, error };
+    return { row: (data?.[0] ?? null) as any, error: null };
+  };
+
+  const fetchLastOfType = async (userId: string, type: string) => {
+    const { data, error } = await supabase
+      .from("time_entries")
+      .select("id, entry_type, occurred_at, created_at")
+      .eq("user_id", userId)
+      .eq("entry_type", type)
+      .order("occurred_at", { ascending: false })
+      .limit(1);
+
+    if (error) return { row: null as any, error };
+    return { row: (data?.[0] ?? null) as any, error: null };
+  };
+
+  const msFromRow = (row: any) => {
+    const d = row?.occurred_at ? new Date(row.occurred_at) : new Date(row?.created_at);
+    return d.getTime();
+  };
+
+  const validateAction = async (userId: string, type: RelevantType, occurredAt: Date) => {
+    const occurredAtISO = occurredAt.toISOString();
+
+    // 1) Anti-duplicados "a prueba": mismo tipo en <10s mirando BD
+    const lastSame = await fetchLastOfType(userId, type);
+    if (lastSame.error) return { ok: false, reason: lastSame.error.message };
+    if (lastSame.row) {
+      const diffSeconds = Math.abs(msFromRow(lastSame.row) - occurredAt.getTime()) / 1000;
+      if (diffSeconds < 10) {
+        return { ok: false, reason: "Espera unos segundos: ya registraste esta acción." };
+      }
+    }
+
+    // 2) Reglas de flujo "a prueba": valida contra último relevante ANTES del occurredAt
+    const lastRel = await fetchLastRelevantBefore(userId, occurredAtISO);
+    if (lastRel.error) return { ok: false, reason: lastRel.error.message };
+
+    const lastType = (lastRel.row?.entry_type ?? "") as RelevantType | "";
+
+    // Derivar modo en ese momento
+    let mode: "working" | "break" | "out" = "out";
+    if (lastType === "clock-in") mode = "working";
+    else if (lastType === "break-start") mode = "break";
+    else if (lastType === "break-end") mode = "working";
+    else if (lastType === "clock-out") mode = "out";
+
+    if (type === "clock-in" && mode !== "out") {
+      return { ok: false, reason: "Ya estás en jornada. Registra una salida antes de volver a entrar." };
+    }
+
+    if (type === "clock-out" && mode !== "working") {
+      return {
+        ok: false,
+        reason:
+          mode === "break"
+            ? "No puedes salir mientras estás en descanso. Registra primero Fin descanso."
+            : "No puedes registrar salida si no estás trabajando.",
+      };
+    }
+
+    if (type === "break-start" && mode !== "working") {
+      return { ok: false, reason: "Debes entrar antes de iniciar descanso" };
+    }
+    if (type === "break-end" && mode !== "break") {
+      return { ok: false, reason: "Inicia descanso antes de terminarlo" };
+    }
+
+    return { ok: true as const };
+  };
+
+  const insertTimeEntryValidated = async (args: {
+    type: RelevantType | EntryType;
+    occurredAt: Date;
+    description: string;
+    dateISO: string;
+    timeHHMM: string;
+  }) => {
+    setMessage(null);
+
+    const { user: authUser, error: userErr } = await getAuthUser();
+    if (userErr || !authUser) {
+      setMessage({ type: "error", text: "No hay sesión activa. Vuelve a iniciar sesión." });
+      return { ok: false };
+    }
+
+    // Solo validamos reglas para tipos relevantes (los otros no afectan al flujo)
+    const lower = (args.type ?? "").toLowerCase();
+    if (relevantTypes.includes(lower as any)) {
+      const v = await validateAction(authUser.id, lower as RelevantType, args.occurredAt);
+      if (!v.ok) {
+        setMessage({ type: "error", text: (v as any).reason ?? "Acción no permitida" });
+        return { ok: false };
+      }
+    }
+
+    const { error } = await supabase.from("time_entries").insert({
+      user_id: authUser.id,
+      occurred_at: args.occurredAt.toISOString(),
+      // compatibilidad con schema actual
+      date: args.dateISO,
+      entry_time: args.timeHHMM,
+      entry_type: args.type,
+      description: args.description,
+      minutes: 0,
+    });
+
+    if (error) {
+      setMessage({ type: "error", text: error.message });
+      return { ok: false };
+    }
+
+    setMessage({ type: "success", text: "Registro guardado ✅" });
+    await loadTodayEntries(args.dateISO);
+    await loadWeekYearTotals();
+    return { ok: true };
+  };
+
+  const quickRegister = async (type: "clock-in" | "clock-out" | "break-start" | "break-end") => {
+    // Mantengo las validaciones inmediatas con estado local para UX rápida,
+    // pero la validación real "a prueba" la hace insertTimeEntryValidated contra BD.
+
+    if (type === "clock-in" && currentMode !== "out") {
+      setMessage({ type: "error", text: "Ya estás en jornada. Registra una salida antes de volver a entrar." });
+      return false;
+    }
+    if (type === "break-start" && currentMode !== "working") {
+      setMessage({ type: "error", text: "Debes entrar antes de inicar descanso" });
+      return false;
+    }
+
+    if (type === "break-end" && currentMode !== "break") {
+      setMessage({ type: "error", text: "Inicia descanso antes de terminarlo" });
+      return false;
+    }
+
+    if (type === "clock-out" && currentMode !== "working") {
+      setMessage({
+        type: "error",
+        text:
+          currentMode === "break"
+            ? "No puedes salir mientras estás en descanso. Registra primero Fin descanso."
+            : "No puedes registrar salida si no estás trabajando.",
+      });
+      return false;
+    }
+
+    const lastSame = lastEntryOfType(type);
+    if (lastSame) {
+      const diffSeconds = (Date.now() - eventTimeMs(lastSame)) / 1000;
+      if (diffSeconds >= 0 && diffSeconds < 10) {
+        setMessage({ type: "error", text: "Espera unos segundos: ya registraste esta acción." });
+        return false;
+      }
+    }
+
+    const now = new Date();
+    const res = await insertTimeEntryValidated({
+      type,
+      occurredAt: now,
+      description: typeMeta(type).label,
+      dateISO: isoDate(now),
+      timeHHMM: nowHHMM(),
+    });
+
+    return !!res.ok;
+  };
+
+  const handleSaveManualEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setMessage(null);
+
+    // La fecha/hora REAL del evento viene del input
+    const occurredAt = new Date(`${entryDate}T${entryTime}:00`);
+    if (Number.isNaN(occurredAt.getTime())) {
+      setSaving(false);
+      setMessage({ type: "error", text: "Fecha u hora inválida." });
+      return;
+    }
+
+    const baseLabel = typeMeta(entryType).label;
+    const finalDesc =
+      entryType === "others-in" || entryType === "others-out" ? contextText.trim() || baseLabel : baseLabel;
+
+    // ✅ Validación "a prueba" (BD) también para manual
+    const res = await insertTimeEntryValidated({
+      type: entryType,
+      occurredAt,
+      description: finalDesc,
+      dateISO: entryDate,
+      timeHHMM: entryTime,
+    });
+
+    setSaving(false);
+
+    if (!res.ok) return;
+
+    setShowModal(false);
+    setContextText("");
+  };
+
+  const handleDeleteEntry = async (id: string) => {
+    setMessage(null);
+
+    const { error } = await supabase.from("time_entries").delete().eq("id", id);
+
+    if (error) {
+      setMessage({ type: "error", text: error.message });
+      return;
+    }
+
+    setTodayEntries((prev) => prev.filter((e) => e.id !== id));
+    setMessage({ type: "success", text: "Registro eliminado" });
+    await loadWeekYearTotals();
+  };
+
   return (
     <div className="bg-background-light dark:bg-background-dark text-slate-900 dark:text-white font-display overflow-x-hidden min-h-screen flex flex-col max-w-md mx-auto relative shadow-2xl pb-32">
       <header className="w-full flex items-center justify-between p-4 pt-6 bg-background-light dark:bg-background-dark sticky top-0 z-10">
@@ -124,68 +704,117 @@ const DashboardScreen: React.FC = () => {
           <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">
             {formatDateShort(currentTime)} • {formatTimeShort(currentTime)}
           </span>
-          <h2 className="text-xl font-bold leading-tight tracking-tight">TimeFlow</h2>
+          <h2 className="text-xl font-bold leading-tight tracking-tight">Tymio</h2>
         </div>
-        
-        <div 
-          onClick={() => navigate('/profile')} 
-          className="bg-center bg-no-repeat bg-cover rounded-full size-12 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all" 
-          style={{backgroundImage: `url("https://picsum.photos/seed/${user.id}/100/100")`}}
+
+        <div
+          onClick={() => navigate("/profile")}
+          className="bg-center bg-no-repeat bg-cover rounded-full size-12 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all"
+          style={{ backgroundImage: `url("https://picsum.photos/seed/${user?.id ?? "anon"}/100/100")` }}
         ></div>
       </header>
+
+      {/* AVISOS */}
+      {message && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[80] w-[70%] max-w-sm pointer-events-none">
+          <div
+            className={`rounded-xl px-4 py-3 text-sm font-semibold ring-1 shadow-lg animate-in fade-in slide-in-from-top-2 duration-300 ${
+              message.type === "error"
+                ? "bg-red-500/25 text-red-200 ring-red-500/100"
+                : "bg-emerald-500/25 text-emerald-200 ring-emerald-500/100"
+            }`}
+          >
+            {message.text}
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 px-4 flex flex-col gap-6">
         {/* Timer Section */}
         <section className="flex flex-col items-center justify-center py-10 bg-white dark:bg-surface-dark rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800/50 mt-2">
-          <p className={`text-sm font-bold uppercase tracking-widest mb-2 ${getStatusColor()}`}>
-            {getStatusLabel()}
-          </p>
-          <h1 className="text-6xl font-black tracking-tighter tabular-nums mb-2">
-            {formatElapsed(elapsedSeconds)}
-          </h1>
+          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">
+            {formatDateShort(currentTime)} • {formatTimeShort(currentTime)}
+          </span>
+          <p className={`text-sm font-bold uppercase tracking-widest mb-2 ${getStatusColor()}`}>{getStatusLabel()}</p>
+          <h1 className="text-5xl font-black tracking-tighter tabular-nums mb-2">{formatElapsed(elapsedSeconds)}</h1>
           <p className="text-slate-400 text-xs font-medium">Tiempo en este estado</p>
         </section>
 
-        {/* Totals Section */}
-        <section className="flex flex-col gap-3">
-          <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-1">Horas Trabajadas</h4>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-white dark:bg-surface-dark p-3 rounded-2xl border border-slate-100 dark:border-slate-800/50 flex flex-col items-center shadow-sm">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">Día</span>
-              <span className="text-sm font-bold text-primary">{totals.day}</span>
-            </div>
-            <div className="bg-white dark:bg-surface-dark p-3 rounded-2xl border border-slate-100 dark:border-slate-800/50 flex flex-col items-center shadow-sm">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">Semana</span>
-              <span className="text-sm font-bold text-primary">{totals.week}</span>
-            </div>
-            <div className="bg-white dark:bg-surface-dark p-3 rounded-2xl border border-slate-100 dark:border-slate-800/50 flex flex-col items-center shadow-sm">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">Año</span>
-              <span className="text-sm font-bold text-primary">{totals.year}</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Actions */}
+        {/* Actions (registran en Supabase) */}
         <section className="w-full max-w-md mx-auto grid grid-cols-2 gap-4">
-          <button onClick={() => handleAction('working')} className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all shadow-lg shadow-primary/20 cursor-pointer bg-primary ring-4 ${status === 'working' ? 'ring-primary/40' : 'ring-transparent opacity-90 hover:opacity-100'}`}>
+          <button
+            disabled={!canClockIn}
+            onClick={async () => {
+              const ok = await quickRegister("clock-in");
+              if (ok) handleAction("working");
+            }}
+            className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all ring-4
+              ${
+                canClockIn
+                  ? `bg-primary shadow-lg shadow-primary/20 ${
+                      status === "working" ? "ring-primary/40" : "ring-transparent opacity-90 hover:opacity-100"
+                    }`
+                  : "bg-primary shadow-none ring-transparent opacity-50 cursor-not-allowed pointer-events-none"
+              }`}
+          >
             <div className="size-10 rounded-full flex items-center justify-center bg-white/10">
               <span className="material-symbols-outlined text-2xl text-white">login</span>
             </div>
             <span className="font-bold text-sm tracking-wide text-white text-center">ENTRADA TRABAJO</span>
           </button>
-          <button onClick={() => handleAction('out')} className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all shadow-sm cursor-pointer bg-slate-600 dark:bg-slate-700 border-none ${status === 'out' ? 'ring-4 ring-slate-400/20' : 'opacity-90 hover:opacity-100'}`}>
+
+          <button
+            disabled={!canClockOut}
+            onClick={async () => {
+              const ok = await quickRegister("clock-out");
+              if (ok) handleAction("out");
+            }}
+            className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all
+              ${
+                canClockOut
+                  ? `shadow-sm cursor-pointer bg-slate-600 dark:bg-slate-700 ${
+                      status === "out" ? "ring-4 ring-slate-400/20" : "opacity-90 hover:opacity-100"
+                    }`
+                  : "bg-slate-600 dark:bg-slate-700 shadow-none ring-0 opacity-50 cursor-not-allowed pointer-events-none"
+              }`}
+          >
             <div className="size-10 rounded-full flex items-center justify-center bg-white/10">
               <span className="material-symbols-outlined text-2xl text-white">logout</span>
             </div>
             <span className="font-bold text-sm tracking-wide text-white text-center">SALIDA TRABAJO</span>
           </button>
-          <button onClick={() => handleAction('break')} className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all shadow-lg shadow-amber-500/20 cursor-pointer bg-amber-500 ring-4 ${status === 'break' ? 'ring-amber-500/40' : 'ring-transparent opacity-90 hover:opacity-100'}`}>
+
+          <button
+            disabled={!canBreakStart}
+            onClick={async () => {
+              const ok = await quickRegister("break-start");
+              if (ok) handleAction("break");
+            }}
+            className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all ring-4
+              ${
+                canBreakStart
+                  ? `bg-amber-500 shadow-lg shadow-amber-500/20 ${
+                      status === "break" ? "ring-amber-500/40" : "ring-transparent opacity-90 hover:opacity-100"
+                    }`
+                  : "bg-amber-500 shadow-none ring-transparent opacity-50 cursor-not-allowed pointer-events-none"
+              }`}
+          >
             <div className="size-10 rounded-full flex items-center justify-center bg-white/10">
               <span className="material-symbols-outlined text-2xl text-white">coffee</span>
             </div>
             <span className="font-bold text-sm tracking-wide leading-none text-center text-white">INICIO DESCANSO</span>
           </button>
-          <button onClick={() => handleAction('working')} className="group flex flex-col items-center justify-center gap-2 p-5 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 transition-all shadow-lg shadow-emerald-500/25 cursor-pointer">
+
+          <button
+            disabled={!canBreakEnd}
+            onClick={async () => {
+              const ok = await quickRegister("break-end");
+              if (ok) handleAction("working");
+            }}
+            className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 transition-all shadow-lg shadow-emerald-500/25 cursor-pointer ${
+              !canBreakEnd ? "opacity-40 cursor-not-allowed pointer-events-none" : ""
+            }`}
+          >
             <div className="size-10 rounded-full bg-white/20 flex items-center justify-center group-hover:bg-white/30 transition-colors">
               <span className="material-symbols-outlined text-white text-2xl">play_arrow</span>
             </div>
@@ -193,52 +822,76 @@ const DashboardScreen: React.FC = () => {
           </button>
         </section>
 
-        {/* Activity of the current day */}
+        {/* Activity (icono + borde por contexto; sin minutos) */}
         <section className="w-full max-w-md mx-auto mt-2">
-          <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 px-1">Actividad del Día Actual</h4>
+          <div className="flex items-center justify-between mb-3 px-1">
+            <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              Actividad del Día Actual
+            </h4>
+            <button
+              type="button"
+              onClick={() => loadTodayEntries(entryDate)}
+              className="text-xs font-bold text-primary hover:opacity-80 transition-opacity"
+            >
+              {loadingEntries ? "Cargando..." : "Actualizar"}
+            </button>
+          </div>
+
           <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-4 p-3 rounded-xl border-l-4 border-emerald-500 bg-white dark:bg-surface-dark shadow-sm">
-              <div className="size-10 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-emerald-600 dark:text-emerald-500 text-xl">play_arrow</span>
+            {todayEntries.length === 0 && !loadingEntries ? (
+              <div className="p-4 rounded-xl bg-white dark:bg-surface-dark border border-slate-100 dark:border-slate-800/50 text-slate-500 dark:text-slate-400 text-sm font-medium">
+                Aún no hay registros hoy. Pulsa el botón + para añadir uno.
               </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">Fin del descanso</p>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">Hoy • 15:15</p>
-              </div>
-              <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">Retorno</span>
-            </div>
-            <div className="flex items-center gap-4 p-3 rounded-xl border-l-4 border-amber-500 bg-white dark:bg-surface-dark shadow-sm">
-              <div className="size-10 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-amber-600 dark:text-amber-500 text-xl">coffee</span>
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">Inicio del descanso</p>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">Hoy • 14:30</p>
-              </div>
-              <span className="text-xs font-bold text-amber-600 dark:text-amber-400">45m</span>
-            </div>
-            <div className="flex items-center gap-4 p-3 rounded-xl border-l-4 border-primary bg-white dark:bg-surface-dark shadow-sm">
-              <div className="size-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-primary text-xl">login</span>
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">Entrada al trabajo</p>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">Hoy • 09:00</p>
-              </div>
-              <span className="text-xs font-bold text-primary">Inicio</span>
-            </div>
+            ) : (
+              todayEntries.map((e) => {
+                const meta = typeMeta(e.entry_type);
+                const c = colorClasses(meta.color);
+
+                const occurred = e.occurred_at ? new Date(e.occurred_at) : new Date(e.created_at);
+                const timeCell = occurred.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+
+                return (
+                  <div
+                    key={e.id}
+                    className={`flex items-center gap-4 p-3 rounded-xl border-l-4 ${c.border} bg-white dark:bg-surface-dark shadow-sm`}
+                  >
+                    <div className={`size-10 rounded-full ${c.iconBg} flex items-center justify-center shrink-0`}>
+                      <span className={`material-symbols-outlined text-xl ${c.iconText}`}>{meta.icon}</span>
+                    </div>
+
+                    <div className="flex-1">
+                      <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">{e.description ?? meta.label}</p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold">
+                        {timeCell} • {meta.label}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteEntry(e.id)}
+                      className="text-[10px] font-bold text-red-300 hover:text-red-200"
+                      title="Eliminar"
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                );
+              })
+            )}
           </div>
         </section>
 
-        {/* Chart */}
+        {/* Chart (decorativo) */}
         <section className="bg-white dark:bg-surface-dark p-6 rounded-3xl border border-slate-100 dark:border-slate-800/50 shadow-sm mb-4">
-          <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-5">Distribución de Tiempo (Anual)</h4>
+          <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-5">
+            Distribución de Tiempo (Anual)
+          </h4>
           <div className="flex items-center justify-around gap-4">
             <div className="relative flex items-center justify-center">
               {renderDonut()}
               <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
                 <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Total</span>
-                <span className="text-base font-black tracking-tight leading-none">{totals.year.split(' ')[0]}</span>
+                <span className="text-base font-black tracking-tight leading-none">{totalsLabels.year}</span>
               </div>
             </div>
             <div className="flex flex-col gap-3">
@@ -262,26 +915,32 @@ const DashboardScreen: React.FC = () => {
       {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-[#151b26] border-t border-slate-200 dark:border-slate-800 pb-safe shadow-[0_-4px_10px_rgba(0,0,0,0.05)] z-30">
         <div className="relative flex justify-around items-center h-16 max-w-md mx-auto">
-          {/* Left: Home */}
           <button className="flex flex-col items-center justify-center w-full h-full gap-1 text-primary">
             <span className="material-symbols-outlined text-[26px]">home</span>
             <span className="text-[10px] font-bold">Inicio</span>
           </button>
-          
-          {/* Center: Add (Floating/Protruding Circle) */}
+
           <div className="absolute -top-7 left-1/2 -translate-x-1/2">
-            <button 
-              onClick={() => setShowModal(true)} 
+            <button
+              onClick={() => {
+                if (currentMode === "out") setEntryType("clock-in");
+                else if (currentMode === "working") setEntryType("clock-out");
+                else if (currentMode === "break") setEntryType("break-end");
+
+                setShowModal(true);
+              }}
               className="size-16 rounded-full bg-primary text-white shadow-xl shadow-primary/30 flex items-center justify-center border-4 border-background-light dark:border-background-dark active:scale-90 transition-transform cursor-pointer"
             >
               <span className="material-symbols-outlined text-4xl">add</span>
             </button>
           </div>
 
-          <div className="w-full"></div> {/* Spacer for central button */}
+          <div className="w-full"></div>
 
-          {/* Right: History */}
-          <button onClick={() => navigate('/history')} className="flex flex-col items-center justify-center w-full h-full gap-1 text-slate-400 dark:text-slate-500 hover:text-primary transition-colors">
+          <button
+            onClick={() => navigate("/history")}
+            className="flex flex-col items-center justify-center w-full h-full gap-1 text-slate-400 dark:text-slate-500 hover:text-primary transition-colors"
+          >
             <span className="material-symbols-outlined text-[26px]">calendar_month</span>
             <span className="text-[10px] font-medium">Historial</span>
           </button>
@@ -289,67 +948,196 @@ const DashboardScreen: React.FC = () => {
       </nav>
 
       {/* Manual Entry Modal */}
-      <div className={`fixed inset-0 z-[60] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 ${showModal ? 'visible opacity-100' : 'invisible opacity-0'}`}>
-        <div onClick={() => { setShowModal(false); setContext(''); }} className="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
-        <div className={`relative w-full max-w-md bg-white dark:bg-surface-dark rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden transition-transform duration-300 ease-out ${showModal ? 'translate-y-0' : 'translate-y-full'}`}>
+      <div
+        className={`fixed inset-0 z-[60] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 ${
+          showModal ? "visible opacity-100" : "invisible opacity-0"
+        }`}
+      >
+        <div
+          onClick={() => {
+            setShowModal(false);
+            setContextText("");
+          }}
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        ></div>
+
+        <div
+          className={`relative w-full max-w-md bg-white dark:bg-surface-dark rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden transition-transform duration-300 ease-out ${
+            showModal ? "translate-y-0" : "translate-y-full"
+          }`}
+        >
           <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">
             <h3 className="text-lg font-bold text-gray-900 dark:text-white">Añadir Registro Manual</h3>
-            <button onClick={() => { setShowModal(false); setContext(''); }} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-500 border-none bg-transparent cursor-pointer">
+            <button
+              onClick={() => {
+                setShowModal(false);
+                setContextText("");
+              }}
+              className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-500 border-none bg-transparent cursor-pointer"
+              type="button"
+            >
               <span className="material-symbols-outlined">close</span>
             </button>
           </div>
-          <form className="p-5 space-y-4 no-scrollbar max-h-[85vh] overflow-y-auto" onSubmit={(e) => { e.preventDefault(); setShowModal(false); setContext(''); }}>
+
+          <form className="p-5 space-y-4 no-scrollbar max-h-[85vh] overflow-y-auto" onSubmit={handleSaveManualEntry}>
             <div className="space-y-3">
-              <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tipo de Registro</label>
+              <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                Tipo de Registro
+              </label>
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setEntryType('clock-in')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'clock-in' ? 'bg-primary text-white border-primary shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-primary'}`}>
+                <button
+                  type="button"
+                  disabled={!canClockIn}
+                  onClick={() => setEntryType("clock-in")}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border
+                    ${
+                      entryType === "clock-in"
+                        ? "bg-primary text-white border-primary shadow-md"
+                        : "bg-primary text-white-500 border-gray-200 dark:border-gray-700 hover:border-primary"
+                    }
+                    ${!canClockIn ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
+                >
                   <span className="material-symbols-outlined text-[18px]">login</span> Entrada
                 </button>
-                <button type="button" onClick={() => setEntryType('clock-out')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'clock-out' ? 'bg-slate-600 text-white border-slate-600 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-slate-600'}`}>
+
+                <button
+                  type="button"
+                  disabled={!canClockOut}
+                  onClick={() => setEntryType("clock-out")}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border
+                    ${
+                      entryType === "clock-out"
+                        ? "bg-slate-600 text-white border-slate-600 shadow-md"
+                        : "bg-slate-600 text-white-500 border-gray-200 dark:border-gray-700 hover:border-slate-600"
+                    }
+                    ${!canClockOut ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
+                >
                   <span className="material-symbols-outlined text-[18px]">logout</span> Salida
                 </button>
-                <button type="button" onClick={() => setEntryType('break-start')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'break-start' ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-amber-500'}`}>
+
+                <button
+                  type="button"
+                  disabled={!canBreakStart}
+                  onClick={() => setEntryType("break-start")}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border
+                    ${
+                      entryType === "break-start"
+                        ? "bg-amber-500 text-white border-amber-500 shadow-md"
+                        : "bg-amber-500 text-white-500 border-gray-200 dark:border-gray-700 hover:border-amber-500"
+                    }
+                    ${!canBreakStart ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
+                >
                   <span className="material-symbols-outlined text-[18px]">coffee</span> Inicio Descanso
                 </button>
-                <button type="button" onClick={() => setEntryType('break-end')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'break-end' ? 'bg-emerald-500 text-white border-emerald-500 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-emerald-500'}`}>
+
+                <button
+                  type="button"
+                  disabled={!canBreakEnd}
+                  onClick={() => setEntryType("break-end")}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border
+                    ${
+                      entryType === "break-end"
+                        ? "bg-emerald-500 text-white border-emerald-500 shadow-md"
+                        : "bg-emerald-500 text-white-500 border-gray-200 dark:border-gray-700 hover:border-emerald-500"
+                    }
+                    ${!canBreakEnd ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
+                >
                   <span className="material-symbols-outlined text-[18px]">play_arrow</span> Fin Descanso
                 </button>
-                {/* Reordered "Otros" Buttons: Salida (Otros) left, Entrada (Otros) right */}
-                <button type="button" onClick={() => setEntryType('others-out')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'others-out' ? 'bg-pink-400 text-white border-pink-400 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-pink-400'}`}>
+
+                {/* SALIDA (OTROS) */}
+                <button
+                  type="button"
+                  disabled={!canOthersOut}
+                  onClick={() => setEntryType("others-out")}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ring-4
+                    ${
+                      canOthersOut
+                        ? `bg-pink-500 text-white border-pink-500 shadow-md ${
+                            entryType === "others-out" ? "ring-pink-500/30" : "ring-transparent hover:opacity-90"
+                          }`
+                        : "bg-pink-500 text-white border-pink-500 shadow-none ring-transparent opacity-50 cursor-not-allowed pointer-events-none"
+                    }`}
+                >
                   <span className="material-symbols-outlined text-[18px]">edit_note</span> Salida (Otros)
                 </button>
-                <button type="button" onClick={() => setEntryType('others-in')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'others-in' ? 'bg-pink-500 text-white border-pink-500 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-pink-500'}`}>
+
+                {/* ENTRADA (OTROS) */}
+                <button
+                  type="button"
+                  disabled={!canOthersIn}
+                  onClick={() => setEntryType("others-in")}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ring-4
+                    ${
+                      canOthersIn
+                        ? `bg-pink-500 text-white border-pink-500 shadow-md ${
+                            entryType === "others-in" ? "ring-pink-500/30" : "ring-transparent hover:opacity-90"
+                          }`
+                        : "bg-pink-500 text-white border-pink-500 shadow-none ring-transparent opacity-50 cursor-not-allowed pointer-events-none"
+                    }`}
+                >
                   <span className="material-symbols-outlined text-[18px]">history_edu</span> Entrada (Otros)
                 </button>
               </div>
             </div>
 
-            {/* Context Input (Shown when "Otros" is selected) */}
-            {(entryType === 'others-in' || entryType === 'others-out') && (
+            {(entryType === "others-in" || entryType === "others-out") && (
               <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2 duration-300">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contexto / Motivo</label>
-                <input 
+                <input
                   autoFocus
-                  className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-pink-500 focus:border-pink-500 text-sm shadow-sm outline-none border transition-colors" 
-                  type="text" 
+                  className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-pink-500 focus:border-pink-500 text-sm shadow-sm outline-none border transition-colors"
+                  type="text"
                   placeholder="Ej: Visita médica, Diligencia..."
-                  value={context}
-                  onChange={(e) => setContext(e.target.value)}
+                  value={contextText}
+                  onChange={(e) => setContextText(e.target.value)}
                 />
               </div>
             )}
 
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Fecha</label>
-              <input className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border" type="date" defaultValue="2024-10-24"/>
+              <input
+                className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border"
+                type="date"
+                value={entryDate}
+                onChange={(e) => setEntryDate(e.target.value)}
+              />
             </div>
+
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hora</label>
-              <input className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border" type="time" defaultValue="08:00"/>
+              <input
+                className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border"
+                type="time"
+                value={entryTime}
+                onChange={(e) => setEntryTime(e.target.value)}
+              />
             </div>
+
             <div className="flex items-center gap-3 pt-2">
-              <button onClick={() => { setShowModal(false); setContext(''); }} className="flex-1 py-3 px-4 rounded-xl text-center text-sm font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors border-none bg-transparent cursor-pointer" type="button">Cancelar</button>
-              <button className={`flex-1 py-3 px-4 rounded-xl text-white text-sm font-bold shadow-lg transition-all hover:opacity-90 border-none cursor-pointer ${(entryType === 'others-in' || entryType === 'others-out') ? 'bg-pink-500 shadow-pink-500/25' : 'bg-primary shadow-primary/25'}`} type="submit">Guardar</button>
+              <button
+                onClick={() => {
+                  setShowModal(false);
+                  setContextText("");
+                }}
+                className="flex-1 py-3 px-4 rounded-xl text-center text-sm font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors border-none bg-transparent cursor-pointer"
+                type="button"
+                disabled={saving}
+              >
+                Cancelar
+              </button>
+
+              <button
+                className={`flex-1 py-3 px-4 rounded-xl text-white text-sm font-bold shadow-lg transition-all hover:opacity-90 border-none cursor-pointer ${saveButtonClasses(
+                  entryType
+                )}`}
+                type="submit"
+                disabled={saving}
+              >
+                {saving ? "Guardando..." : "Guardar"}
+              </button>
             </div>
           </form>
         </div>

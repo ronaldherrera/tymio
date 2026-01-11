@@ -1,13 +1,46 @@
-
-import React, { useContext } from 'react';
-import { AppContext } from '../App';
+import React, { useContext, useMemo, useState } from "react";
+import { AppContext } from "../App";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "../services/supabase";
 
 const LoginScreen: React.FC = () => {
-  const { setIsLoggedIn } = useContext(AppContext);
+  const { setIsLoggedIn } = useContext(AppContext); // lo mantenemos por compatibilidad con tu App actual
+  const navigate = useNavigate();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
+
+  const canSubmit = useMemo(() => {
+    return email.trim().length > 3 && password.length >= 6 && !loading;
+  }, [email, password, loading]);
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setMessage(null);
+    setLoading(true);
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setMessage({ type: "error", text: error.message });
+      return;
+    }
+
+    // ✅ Login real logrado
+    // Mantengo esto para que tu app actual reaccione (porque aún usas isLoggedIn en AppContext)
     setIsLoggedIn(true);
+
+    setMessage({ type: "success", text: "Sesión iniciada ✅" });
+    navigate("/dashboard");
   };
 
   return (
@@ -17,55 +50,109 @@ const LoginScreen: React.FC = () => {
           <div className="h-20 w-20 bg-gradient-to-br from-primary to-blue-600 rounded-2xl shadow-glow flex items-center justify-center mb-6 text-white transform rotate-3 hover:rotate-0 transition-transform duration-300">
             <span className="material-symbols-outlined text-[40px]">schedule</span>
           </div>
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-center text-slate-900 dark:text-white">Bienvenido</h1>
-          <p className="text-slate-500 dark:text-[#92a4c9] mt-3 text-center text-base font-medium">Controla tu tiempo, maximiza tu día</p>
+          <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-center text-slate-900 dark:text-white">
+            Bienvenido
+          </h1>
+          <p className="text-slate-500 dark:text-[#92a4c9] mt-3 text-center text-base font-medium">
+            Controla tu tiempo, maximiza tu día
+          </p>
         </div>
 
         <form className="flex flex-col gap-5 w-full mt-4" onSubmit={handleLogin}>
           <div className="space-y-2">
-            <label className="text-sm font-semibold text-slate-700 dark:text-white ml-1">Correo electrónico</label>
+            <label className="text-sm font-semibold text-slate-700 dark:text-white ml-1">
+              Correo electrónico
+            </label>
             <div className="relative group">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                <span className="material-symbols-outlined text-slate-400 group-focus-within:text-primary transition-colors">mail</span>
+                <span className="material-symbols-outlined text-slate-400 group-focus-within:text-primary transition-colors">
+                  mail
+                </span>
               </div>
-              <input 
-                className="block w-full h-14 pl-12 pr-4 rounded-xl border-0 bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] focus:ring-2 focus:ring-inset focus:ring-primary dark:focus:ring-primary sm:text-base sm:leading-6 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#92a4c9] shadow-sm transition-all outline-none" 
-                placeholder="nombre@empresa.com" 
-                type="email" 
-                defaultValue="carlos.r@empresa.com"
+              <input
+                className="block w-full h-14 pl-12 pr-4 rounded-xl border-0 bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] focus:ring-2 focus:ring-inset focus:ring-primary dark:focus:ring-primary sm:text-base sm:leading-6 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#92a4c9] shadow-sm transition-all outline-none"
+                placeholder="nombre@empresa.com"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
               />
             </div>
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-semibold text-slate-700 dark:text-white ml-1">Contraseña</label>
+            <label className="text-sm font-semibold text-slate-700 dark:text-white ml-1">
+              Contraseña
+            </label>
             <div className="relative group">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                <span className="material-symbols-outlined text-slate-400 group-focus-within:text-primary transition-colors">lock</span>
+                <span className="material-symbols-outlined text-slate-400 group-focus-within:text-primary transition-colors">
+                  lock
+                </span>
               </div>
-              <input 
-                className="block w-full h-14 pl-12 pr-12 rounded-xl border-0 bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] focus:ring-2 focus:ring-inset focus:ring-primary dark:focus:ring-primary sm:text-base sm:leading-6 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#92a4c9] shadow-sm transition-all outline-none" 
-                placeholder="••••••••" 
-                type="password" 
-                defaultValue="password123"
+
+              <input
+                className="block w-full h-14 pl-12 pr-12 rounded-xl border-0 bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] focus:ring-2 focus:ring-inset focus:ring-primary dark:focus:ring-primary sm:text-base sm:leading-6 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#92a4c9] shadow-sm transition-all outline-none"
+                placeholder="••••••••"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
               />
-              <div className="absolute inset-y-0 right-0 pr-4 flex items-center cursor-pointer text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors">
-                <span className="material-symbols-outlined text-[20px]">visibility</span>
-              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute inset-y-0 right-0 pr-4 flex items-center cursor-pointer text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
+                aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+              >
+                <span className="material-symbols-outlined text-[20px]">
+                  {showPassword ? "visibility_off" : "visibility"}
+                </span>
+              </button>
             </div>
           </div>
 
           <div className="flex items-center justify-end">
-            <a className="text-sm font-semibold text-primary hover:text-blue-400 transition-colors" href="#">
+            <a
+              className="text-sm font-semibold text-primary hover:text-blue-400 transition-colors"
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                setMessage({ type: "error", text: "Recuperación de contraseña la activamos después." });
+              }}
+            >
               ¿Olvidaste tu contraseña?
             </a>
           </div>
 
+          {message && (
+            <div
+              className={`rounded-xl px-4 py-3 text-sm font-semibold ring-1 ${
+                message.type === "error"
+                  ? "bg-red-500/10 text-red-200 ring-red-500/30"
+                  : "bg-emerald-500/10 text-emerald-200 ring-emerald-500/30"
+              }`}
+            >
+              {message.text}
+            </div>
+          )}
+
           <div className="flex gap-3 mt-2">
-            <button type="submit" className="flex-1 h-14 bg-primary hover:bg-blue-600 text-white font-bold rounded-xl shadow-glow shadow-blue-900/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98]">
-              <span>Iniciar Sesión</span>
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="flex-1 h-14 bg-primary hover:bg-blue-600 disabled:opacity-60 text-white font-bold rounded-xl shadow-glow shadow-blue-900/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <span>{loading ? "Entrando..." : "Iniciar Sesión"}</span>
             </button>
-            <button aria-label="Face ID Login" className="h-14 w-14 bg-white dark:bg-surface-dark hover:bg-slate-50 dark:hover:bg-[#202b40] ring-1 ring-inset ring-slate-200 dark:ring-[#324467] rounded-xl flex items-center justify-center text-primary transition-all active:scale-[0.95]" type="button">
+
+            <button
+              aria-label="Face ID Login"
+              className="h-14 w-14 bg-white dark:bg-surface-dark hover:bg-slate-50 dark:hover:bg-[#202b40] ring-1 ring-inset ring-slate-200 dark:ring-[#324467] rounded-xl flex items-center justify-center text-primary transition-all active:scale-[0.95]"
+              type="button"
+              onClick={() => setMessage({ type: "error", text: "Face ID/Apple/Google lo activamos después." })}
+            >
               <span className="material-symbols-outlined text-[28px]">face</span>
             </button>
           </div>
@@ -78,11 +165,22 @@ const LoginScreen: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <button className="h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group">
-            <span className="material-symbols-outlined text-2xl text-slate-900 dark:text-white group-hover:scale-110 transition-transform">smartphone</span>
+          <button
+            type="button"
+            className="h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group"
+            onClick={() => setMessage({ type: "error", text: "Apple login lo configuramos después en Supabase." })}
+          >
+            <span className="material-symbols-outlined text-2xl text-slate-900 dark:text-white group-hover:scale-110 transition-transform">
+              smartphone
+            </span>
             <span className="text-sm font-semibold text-slate-700 dark:text-white">Apple</span>
           </button>
-          <button className="h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group">
+
+          <button
+            type="button"
+            className="h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group"
+            onClick={() => setMessage({ type: "error", text: "Google login lo configuramos después en Supabase." })}
+          >
             <div className="w-5 h-5 rounded-full border-4 border-l-blue-500 border-t-red-500 border-r-yellow-400 border-b-green-500 group-hover:rotate-90 transition-transform duration-500"></div>
             <span className="text-sm font-semibold text-slate-700 dark:text-white">Google</span>
           </button>
@@ -90,8 +188,14 @@ const LoginScreen: React.FC = () => {
 
         <div className="mt-auto pt-8 pb-4 text-center">
           <p className="text-slate-500 dark:text-[#92a4c9] text-sm font-medium">
-            ¿No tienes una cuenta? 
-            <a className="font-bold text-primary hover:text-blue-400 ml-1 transition-colors" href="#">Crear cuenta nueva</a>
+            ¿No tienes una cuenta?
+            <button
+              type="button"
+              onClick={() => navigate("/signin")}
+              className="font-bold text-primary hover:text-blue-400 ml-1 transition-colors"
+            >
+              Crear cuenta nueva
+            </button>
           </p>
         </div>
       </div>
