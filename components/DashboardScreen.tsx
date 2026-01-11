@@ -75,7 +75,7 @@ const saveButtonClasses = (type: EntryType) => {
     case "break-start":
       return "bg-amber-500 shadow-amber-500/25";
     case "break-end":
-      return "bg-emerald-500 shadow-emerald-500/25";
+      return "bg-amber-500 shadow-amber-500/25";
     case "others-in":
     case "others-out":
       return "bg-pink-500 shadow-pink-500/25";
@@ -88,9 +88,9 @@ const typeMeta = (t: string | null | undefined) => {
   const type = (t ?? "").toLowerCase();
   switch (type) {
     case "clock-in":
-      return { label: "Entrada", icon: "login", color: "primary" as const };
+      return { label: "Entrada trabajo", icon: "login", color: "primary" as const };
     case "clock-out":
-      return { label: "Salida", icon: "logout", color: "slate" as const };
+      return { label: "Salida trabajo", icon: "logout", color: "slate" as const };
     case "break-start":
       return {
         label: "Inicio descanso",
@@ -105,13 +105,13 @@ const typeMeta = (t: string | null | undefined) => {
       };
     case "others-in":
       return {
-        label: "Entrada (Otros)",
+        label: "Fin Permiso",
         icon: "history_edu",
         color: "pink" as const,
       };
     case "others-out":
       return {
-        label: "Salida (Otros)",
+        label: "Permiso",
         icon: "edit_note",
         color: "pink" as const,
       };
@@ -163,7 +163,7 @@ const DashboardScreen: React.FC = () => {
   const { user } = useContext(AppContext);
 
   // Estado visual
-  const [status, setStatus] = useState<"working" | "break" | "out">("out");
+  const [status, setStatus] = useState<"working" | "break" | "out" | "others">("out");
   const [sessionStartTime, setSessionStartTime] = useState<Date>(
     new Date(new Date().getTime() - 4.25 * 60 * 60 * 1000),
   );
@@ -180,15 +180,19 @@ const DashboardScreen: React.FC = () => {
   const [initialEntryDate, setInitialEntryDate] = useState<string | null>(null);
   const [initialEntryTime, setInitialEntryTime] = useState<string | null>(null);
 
+  // Modal específico para "Salida (Otros)" - Solo motivo
+  const [showReasonModal, setShowReasonModal] = useState(false);
+  const [reasonText, setReasonText] = useState("");
+
 
   // Supabase data
   const [todayEntries, setTodayEntries] = useState<TimeEntry[]>([]);
-  const [liveMode, setLiveMode] = useState<"working" | "break" | "out">("out");
+  const [liveMode, setLiveMode] = useState<"working" | "break" | "out" | "others">("out");
   const [liveModeSince, setLiveModeSince] = useState<Date>(new Date());
 
 
   // --- Estado lógico según últimos fichajes (para validar acciones) ---
-  const currentMode = useMemo<"working" | "break" | "out">(() => {
+  const currentMode = useMemo<"working" | "break" | "out" | "others">(() => {
   const ms = (e: TimeEntry) => {
     const d = e.occurred_at ? new Date(e.occurred_at) : new Date(e.created_at);
     return d.getTime();
@@ -202,7 +206,8 @@ const DashboardScreen: React.FC = () => {
           t === "clock-in" ||
           t === "clock-out" ||
           t === "break-start" ||
-          t === "break-end"
+          t === "break-end" ||
+          t === "others-out"
         );
       })
       .sort((a, b) => ms(b) - ms(a))[0] ?? null;
@@ -213,6 +218,7 @@ const DashboardScreen: React.FC = () => {
   if (t === "clock-in") return "working";
   if (t === "break-start") return "break";
   if (t === "break-end") return "working";
+  if (t === "others-out") return "others"; // Nuevo estado lógico
   if (t === "clock-out") return "out";
 
   return "out";
@@ -238,6 +244,7 @@ const DashboardScreen: React.FC = () => {
     );
   }, [todayEntries]);
 
+  // --- UX: habilitar/deshabilitar botones según estado lógico ---
   // --- UX: habilitar/deshabilitar botones según estado lógico ---
   const canClockIn = liveMode === "out";
   const canClockOut = liveMode === "working";
@@ -322,9 +329,11 @@ const DashboardScreen: React.FC = () => {
       case "working":
         return "Trabajando";
       case "break":
-        return "En Descanso";
+        return "Descanso";
       case "out":
-        return "Fuera del trabajo";
+        return "Salida";
+      case "others":
+        return "En Permiso";
       default:
         return "";
     }
@@ -338,22 +347,25 @@ const DashboardScreen: React.FC = () => {
         return "text-amber-500";
       case "out":
         return "text-slate-400";
+      case "others":
+        return "text-pink-500";
       default:
         return "";
     }
   };
 
-  const handleAction = (newStatus: "working" | "break" | "out") => {
+  const handleAction = (newStatus: "working" | "break" | "out" | "others") => {
     setStatus(newStatus);
     setSessionStartTime(new Date());
   };
 
   const formatDateShort = (date: Date) => {
-    return date.toLocaleDateString("es-ES", {
-      weekday: "short",
+    const s = date.toLocaleDateString("es-ES", {
+      weekday: "long",
       day: "numeric",
-      month: "short",
+      month: "long",
     });
+    return s.charAt(0).toUpperCase() + s.slice(1);
   };
 
   const formatTimeShort = (date: Date) => {
@@ -365,7 +377,14 @@ const DashboardScreen: React.FC = () => {
 
   // Totales (por ahora: sumamos minutos legacy si existieran; cuando eliminemos minutes ya lo quitamos)
   const [weekTotalMins, setWeekTotalMins] = useState(0);
+
   const [yearTotalMins, setYearTotalMins] = useState(0);
+  
+  // Totales desglozados Anual
+  const [yearWorkMins, setYearWorkMins] = useState(0);
+  const [yearBreakMins, setYearBreakMins] = useState(0);
+  const [yearOthersMins, setYearOthersMins] = useState(0);
+  const [yearOutMins, setYearOutMins] = useState(0);
 
   const totalsLabels = useMemo(() => {
     return {
@@ -377,11 +396,27 @@ const DashboardScreen: React.FC = () => {
   // Chart decorativo
   const chartData = useMemo(
     () => [
-      { label: "Trabajando", hours: "—", value: 65, color: "#135bec" },
-      { label: "Descansando", hours: "—", value: 15, color: "#f59e0b" },
-      { label: "Libre", hours: "—", value: 20, color: "#475569" },
+
+      { 
+        label: "Trabajando", 
+        hours: minutesToLabel(yearWorkMins).replace("h", "h ").replace("m", "m"), // Formato visual
+        value: yearTotalMins > 0 ? Math.round((yearWorkMins / yearTotalMins) * 100) : 0, 
+        color: "#135bec" // Primary Blue
+      },
+      { 
+        label: "Descansando", 
+        hours: minutesToLabel(yearBreakMins).replace("h", "h ").replace("m", "m"), 
+        value: yearTotalMins > 0 ? Math.round((yearBreakMins / yearTotalMins) * 100) : 0, 
+        color: "#f59e0b" // Amber
+      },
+      { 
+        label: "Permiso", 
+        hours: minutesToLabel(yearOthersMins).replace("h", "h ").replace("m", "m"), 
+        value: yearTotalMins > 0 ? Math.round((yearOthersMins / yearTotalMins) * 100) : 0, 
+        color: "#ec4899" // Pink
+      },
     ],
-    [],
+    [yearWorkMins, yearBreakMins, yearOthersMins, yearTotalMins],
   );
 
   const renderDonut = () => {
@@ -398,37 +433,43 @@ const DashboardScreen: React.FC = () => {
         viewBox={`0 0 ${size} ${size}`}
         className="transform -rotate-90 drop-shadow-sm"
       >
-        {chartData.map((item, index) => {
-          const startPercent = cumulativePercent;
-          const endPercent = cumulativePercent + item.value;
-          cumulativePercent = endPercent;
+        {(() => {
+          let cumulativePercent = 0;
+          return chartData.map((item, index) => {
+            const startPercent = cumulativePercent;
+            const endPercent = cumulativePercent + item.value;
+            cumulativePercent = endPercent;
 
-          const startAngle = (startPercent / 100) * 2 * Math.PI;
-          const endAngle = (endPercent / 100) * 2 * Math.PI;
+            // Ajuste visual: Si todos son "round", los extremos se extienden.
+            // Para evitar solapamientos feos en valores pequeños, a veces se ajustan los ángulos,
+            // pero con el diseño estándar de stroke-dasharray o paths simples, el round se dibuja centrado en el extremo.
+            const startAngle = (startPercent / 100) * 2 * Math.PI;
+            const endAngle = (endPercent / 100) * 2 * Math.PI;
 
-          const x1 = center + radius * Math.cos(startAngle);
-          const y1 = center + radius * Math.sin(startAngle);
-          const x2 = center + radius * Math.cos(endAngle);
-          const y2 = center + radius * Math.sin(endAngle);
+            const x1 = center + radius * Math.cos(startAngle);
+            const y1 = center + radius * Math.sin(startAngle);
+            const x2 = center + radius * Math.cos(endAngle);
+            const y2 = center + radius * Math.sin(endAngle);
 
-          const largeArcFlag = item.value > 50 ? 1 : 0;
-          const pathData = [
-            `M ${x1} ${y1}`,
-            `A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`,
-          ].join(" ");
+            const largeArcFlag = item.value > 50 ? 1 : 0;
+            const pathData = [
+              `M ${x1} ${y1}`,
+              `A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`,
+            ].join(" ");
 
-          return (
-            <path
-              key={index}
-              d={pathData}
-              fill="none"
-              stroke={item.color}
-              strokeWidth={strokeWidth}
-              strokeLinecap="round"
-              className="transition-all duration-1000 ease-out"
-            />
-          );
-        })}
+            return (
+              <path
+                key={index}
+                d={pathData}
+                fill="none"
+                stroke={item.color}
+                strokeWidth={strokeWidth}
+                strokeLinecap="round"
+                style={{ zIndex: index }} // Orden secuencial simple
+              />
+            );
+          });
+        })()}
       </svg>
     );
   };
@@ -474,6 +515,8 @@ const DashboardScreen: React.FC = () => {
     setTodayEntries(((data ?? []) as TimeEntry[]) ?? []);
   };
 
+
+
   const loadWeekYearTotals = async () => {
     const { data: userData, error: userErr } = await supabase.auth.getUser();
     const authUser = userData?.user;
@@ -483,8 +526,10 @@ const DashboardScreen: React.FC = () => {
     const weekStart = startOfWeekMonday(now);
     const yearStart = startOfYear(now);
 
-    // Mientras minutes exista, sumamos minutes; cuando lo eliminemos, este bloque cambiará a cálculo real.
-    const { data: weekData, error: weekErr } = await supabase
+    // 1. Semana: mantenemos lógica simple (o podríamos replicar la compleja si usuario quiere, pero foco es año)
+    // Para no romper, dejamos la suma de "minutes" de la semana si existen, o 0.
+    // (Idealmente deberíamos aplicar la misma lógica compleja a la semana, pero paso a paso)
+     const { data: weekData, error: weekErr } = await supabase
       .from("time_entries")
       .select("minutes")
       .eq("user_id", authUser.id)
@@ -499,20 +544,80 @@ const DashboardScreen: React.FC = () => {
       setWeekTotalMins(total);
     }
 
-    const { data: yearData, error: yearErr } = await supabase
+    // 2. Año: CÁLCULO REAL ITERATIVO
+    // Recuperamos TODAS las entradas del año ordenadas cronológicamente
+    const { data: yearEntries, error: yearEntriesErr } = await supabase
       .from("time_entries")
-      .select("minutes")
+      .select("entry_type, occurred_at, created_at")
       .eq("user_id", authUser.id)
       .gte("occurred_at", yearStart.toISOString())
-      .lte("occurred_at", now.toISOString());
+      .lte("occurred_at", now.toISOString())
+      .order("occurred_at", { ascending: true }); // Importante: ascendente para reconstruir historia
 
-    if (!yearErr) {
-      const total = (yearData ?? []).reduce(
-        (acc: number, row: any) => acc + (Number(row.minutes) || 0),
-        0,
-      );
-      setYearTotalMins(total);
+    if (yearEntriesErr || !yearEntries) return;
+
+    let wMins = 0;
+    let bMins = 0;
+    let oMins = 0;
+    
+    // Estado inicial al principio del año (asumimos 'out' si no hay nada previo, 
+    // o podríamos buscar el último del año pasado, pero simplificamos a 'out' start)
+    let lastState: "working" | "break" | "others" | "out" = "out";
+    let lastTime = yearStart.getTime(); 
+
+    // Helper para mapear tipo a estado
+    const mapTypeToState = (type: string): "working" | "break" | "others" | "out" => {
+       const t = type.toLowerCase();
+       if (t === "clock-in") return "working";
+       if (t === "break-start") return "break";
+       if (t === "break-end") return "working"; // Vuele a trabajar
+       if (t === "others-out") return "others";
+       if (t === "others-in") return "working"; // Vuelve a trabajar
+       if (t === "clock-out") return "out";
+       return "out"; 
+    };
+
+    for (const e of yearEntries) {
+       const eTime = e.occurred_at ? new Date(e.occurred_at).getTime() : new Date(e.created_at).getTime();
+       
+       // Calcular delta desde el último evento
+       const diffMins = Math.floor((eTime - lastTime) / 1000 / 60);
+       
+       if (diffMins > 0) {
+          if (lastState === "working") wMins += diffMins;
+          else if (lastState === "break") bMins += diffMins;
+          else if (lastState === "others") oMins += diffMins;
+          // 'out' no lo sumamos explícitamente aquí, lo calcularemos por diferencia o acumulado
+       }
+
+       // Actualizar estado y tiempo
+       lastState = mapTypeToState(e.entry_type ?? "");
+       lastTime = eTime;
     }
+
+    // Sumar tramo final hasta AHORA
+    const nowTime = now.getTime();
+    const finalDiff = Math.floor((nowTime - lastTime) / 1000 / 60);
+    if (finalDiff > 0) {
+        if (lastState === "working") wMins += finalDiff;
+        else if (lastState === "break") bMins += finalDiff;
+        else if (lastState === "others") oMins += finalDiff;
+    }
+
+    // Calcular tiempo total del año transcurrido (para sacar 'out' por descarte o proporción)
+    // REFINAMIENTO: El usuario NO quiere ver el tiempo "Fuera", solo la distribución de los registros.
+    // Así que el total será la suma de los 3 estados activos.
+    
+    // const totalPossibleMins = Math.floor((nowTime - yearStart.getTime()) / 1000 / 60);
+    // const outMins = Math.max(0, totalPossibleMins - (wMins + bMins + oMins));
+
+    setYearWorkMins(wMins);
+    setYearBreakMins(bMins);
+    setYearOthersMins(oMins);
+    // setYearOutMins(outMins); // Ya no se usa
+    
+    // Total para el gráfico = Solo la suma de actividades
+    setYearTotalMins(wMins + bMins + oMins);
   };
 
   const refreshAll = async () => {
@@ -542,6 +647,8 @@ const DashboardScreen: React.FC = () => {
     "clock-out",
     "break-start",
     "break-end",
+    "others-out", // Necesario para detectar modo 'others'
+    "others-in",
   ] as const;
   type RelevantType = (typeof relevantTypes)[number];
 
@@ -573,10 +680,11 @@ const DashboardScreen: React.FC = () => {
 
   const lastType = (lastRel.row?.entry_type ?? "").toLowerCase();
 
-  let mode: "working" | "break" | "out" = "out";
+  let mode: "working" | "break" | "out" | "others" = "out";
   if (lastType === "clock-in") mode = "working";
   else if (lastType === "break-start") mode = "break";
   else if (lastType === "break-end") mode = "working";
+  else if (lastType === "others-out") mode = "others";
   else if (lastType === "clock-out") mode = "out";
 
   setLiveMode(mode);
@@ -639,13 +747,14 @@ const DashboardScreen: React.FC = () => {
     const lastType = (lastRel.row?.entry_type ?? "") as RelevantType | "";
 
     // Derivar modo en ese momento
-    let mode: "working" | "break" | "out" = "out";
+    let mode: "working" | "break" | "out" | "others" = "out";
     if (lastType === "clock-in") mode = "working";
     else if (lastType === "break-start") mode = "break";
     else if (lastType === "break-end") mode = "working";
+    else if (lastType === "others-out") mode = "others";
     else if (lastType === "clock-out") mode = "out";
 
-    if (type === "clock-in" && mode !== "out") {
+    if (type === "clock-in" && mode !== "out" && mode !== "break" && mode !== "others") {
       return {
         ok: false,
         reason:
@@ -739,10 +848,11 @@ const DashboardScreen: React.FC = () => {
   // Solo si es un tipo relevante y es más reciente que el último estado conocido
   if (relevantTypes.includes(insertedType as any)) {
     if (insertedAt.getTime() >= liveModeSince.getTime()) {
-      let mode: "working" | "break" | "out" = "out";
+      let mode: "working" | "break" | "out" | "others" = "out";
       if (insertedType === "clock-in") mode = "working";
       else if (insertedType === "break-start") mode = "break";
       else if (insertedType === "break-end") mode = "working";
+      else if (insertedType === "others-out") mode = "others";
       else if (insertedType === "clock-out") mode = "out";
 
       setLiveMode(mode);
@@ -770,7 +880,7 @@ const DashboardScreen: React.FC = () => {
     // Mantengo las validaciones inmediatas con estado local para UX rápida,
     // pero la validación real "a prueba" la hace insertTimeEntryValidated contra BD.
 
-    if (type === "clock-in" && currentMode !== "out") {
+    if (type === "clock-in" && currentMode !== "out" && currentMode !== "break" && currentMode !== "others") {
       setMessage({
         type: "error",
         text: "Ya estás en jornada. Registra una salida antes de volver a entrar.",
@@ -832,6 +942,13 @@ const DashboardScreen: React.FC = () => {
     e.preventDefault();
     setSaving(true);
     setMessage(null);
+
+    // Validación de motivo para OTROS
+    if ((entryType === "others-in" || entryType === "others-out") && !contextText.trim()) {
+      setMessage({ type: "error", text: "Debes indicar un contexto o motivo." });
+      setSaving(false);
+      return;
+    }
 
     // Si el usuario NO tocó fecha/hora, asumimos que quiere registrar "ahora"
     const now = new Date();
@@ -910,7 +1027,7 @@ const DashboardScreen: React.FC = () => {
     <div className="bg-background-light dark:bg-background-dark text-slate-900 dark:text-white font-display overflow-x-hidden min-h-screen flex flex-col max-w-md mx-auto relative shadow-2xl pb-32">
       <header className="w-full flex items-center justify-between p-4 pt-6 bg-background-light dark:bg-background-dark sticky top-0 z-10">
         <div className="flex flex-col">
-          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">
+          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 tracking-tighter">
             {formatDateShort(currentTime)} • {formatTimeShort(currentTime)}
           </span>
           <h2 className="text-xl font-bold leading-tight tracking-tight">
@@ -944,22 +1061,27 @@ const DashboardScreen: React.FC = () => {
 
       <main className="flex-1 px-4 flex flex-col gap-6">
         {/* Timer Section */}
-        <section className="flex flex-col items-center justify-center py-10 bg-white dark:bg-surface-dark rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800/50 mt-2">
-          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">
+        <div className="flex flex-col gap-2">
+          <span className="text-[12.px] font-bold text-slate-400 dark:text-slate-500 tracking-tighter">
             {formatDateShort(currentTime)} • {formatTimeShort(currentTime)}
           </span>
+          <section className="flex flex-col items-center justify-center py-10 bg-white dark:bg-surface-dark rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800/50">
+          <p className="text-slate-400 text-xs font-medium">
+            Tiempo en este estado
+          </p>
+          <h1 className={`${elapsedSeconds > 86400 && status !== 'out' ? "text-2xl" : "text-5xl"} font-black tracking-tighter tabular-nums mb-2 text-center`}>
+            {elapsedSeconds > 86400 && status !== 'out'
+              ? "Más de 24h"
+              : formatElapsed(elapsedSeconds)}
+          </h1>
           <p
             className={`text-sm font-bold uppercase tracking-widest mb-2 ${getStatusColor()}`}
           >
             {getStatusLabel()}
           </p>
-          <h1 className="text-5xl font-black tracking-tighter tabular-nums mb-2">
-            {formatElapsed(elapsedSeconds)}
-          </h1>
-          <p className="text-slate-400 text-xs font-medium">
-            Tiempo en este estado
-          </p>
+          
         </section>
+        </div>
 
         {/* Actions (registran en Supabase) */}
         <section className="w-full max-w-md mx-auto grid grid-cols-2 gap-4">
@@ -986,7 +1108,7 @@ const DashboardScreen: React.FC = () => {
               </span>
             </div>
             <span className="font-bold text-sm tracking-wide text-white text-center">
-              ENTRADA TRABAJO
+              ENTRADA
             </span>
           </button>
 
@@ -1013,7 +1135,7 @@ const DashboardScreen: React.FC = () => {
               </span>
             </div>
             <span className="font-bold text-sm tracking-wide text-white text-center">
-              SALIDA TRABAJO
+              SALIDA
             </span>
           </button>
 
@@ -1040,29 +1162,29 @@ const DashboardScreen: React.FC = () => {
               </span>
             </div>
             <span className="font-bold text-sm tracking-wide leading-none text-center text-white">
-              INICIO DESCANSO
+              DESCANSO
             </span>
           </button>
 
           <button
-            disabled={!canBreakEnd}
-            onClick={async () => {
-              const ok = await quickRegister("break-end");
-              if (ok) handleAction("working");
+            disabled={!canOthersOut}
+            onClick={() => {
+              setReasonText("");
+              setShowReasonModal(true);
             }}
-            className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 transition-all shadow-lg shadow-emerald-500/25 cursor-pointer ${
-              !canBreakEnd
+            className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl bg-pink-500 hover:bg-pink-600 active:scale-95 transition-all shadow-lg shadow-pink-500/25 cursor-pointer ${
+              !canOthersOut
                 ? "opacity-40 cursor-not-allowed pointer-events-none"
                 : ""
             }`}
           >
             <div className="size-10 rounded-full bg-white/20 flex items-center justify-center group-hover:bg-white/30 transition-colors">
               <span className="material-symbols-outlined text-white text-2xl">
-                play_arrow
+                edit_note
               </span>
             </div>
             <span className="text-white font-bold text-sm tracking-wide leading-none text-center">
-              FIN DESCANSO
+              PERMISO
             </span>
           </button>
         </section>
@@ -1089,7 +1211,7 @@ const DashboardScreen: React.FC = () => {
                 Aún no hay registros hoy. Pulsa el botón + para añadir uno.
               </div>
             ) : (
-              todayEntries.map((e) => {
+              todayEntries.map((e, idx) => {
                 const meta = typeMeta(e.entry_type);
                 const c = colorClasses(meta.color);
 
@@ -1101,6 +1223,159 @@ const DashboardScreen: React.FC = () => {
                   minute: "2-digit",
                 });
 
+                // Cálculo de duración (tiempo en ese estado)
+                let durationLabel = null;
+                const type = (e.entry_type ?? "").toLowerCase();
+                if (
+                  type === "clock-in" ||
+                  type === "break-start" ||
+                  type === "clock-out" ||
+                  type === "others-out"
+                ) {
+                  const msCurrent = occurred.getTime();
+                  // El evento "siguiente" en cronología es el índice anterior en la lista (porque está ordenado descendente)
+                  const parsedNext =
+                    idx > 0 ? todayEntries[idx - 1] : null;
+
+                  let msNext = new Date().getTime(); // Por defecto "ahora" si es el último
+                  if (parsedNext) {
+                    msNext = parsedNext.occurred_at
+                      ? new Date(parsedNext.occurred_at).getTime()
+                      : new Date(parsedNext.created_at).getTime();
+                  }
+                  
+                  // Si el registro NO es el más reciente (idx > 0) y no hay "next" (caso raro si hay >1), no calculamos (o usamos ahora? no, debería haber previo si idx>0)
+                  // idx=0 es el mas reciente. idx=1 es anterior. 
+                  // "next" cronológico es idx-1 (el mas nuevo).
+                  // Ej: [10:00, 09:00]. idx=1 (09:00). Next=idx-1=0 (10:00). Diff=1h.
+                  
+                  const diff = msNext - msCurrent;
+                  if (diff > 0) {
+                     durationLabel = minutesToLabel(Math.floor(diff / 1000 / 60));
+                  }
+                }
+
+                // Ocultar "break-end" y "others-in" de la lista visual (limpieza)
+                if (
+                  (e.entry_type ?? "").toLowerCase() === "break-end" ||
+                  (e.entry_type ?? "").toLowerCase() === "others-in"
+                ) {
+                  return null;
+                }
+
+                // Títulos de estado específicos
+                const stateTitles: Record<string, string> = {
+                  "clock-in": "Trabajando",
+                  "clock-out": "Salida",
+                  "break-start": "Descanso",
+                  "break-end": "Entrada", // Unificado
+                  "others-in": "Fin Permiso",
+                };
+
+                const typeKey = (e.entry_type ?? "").toLowerCase();
+                const isStandard = Object.keys(stateTitles).includes(typeKey);
+
+                let displayLabel = isStandard
+                  ? stateTitles[typeKey]
+                  : e.description ?? meta.label;
+                
+                // Si es "others-out", mostramos la descripción limpia (el motivo)
+                if (typeKey === "others-out") {
+                   const rawDesc = e.description || "";
+                   displayLabel = rawDesc.replace(/^Permiso:\s*/i, "").replace(/^Salida:\s*/i, "") || "Permiso";
+                }
+
+                // Lógica de tarjetas INTERACTIVAS (Estados activos)
+                
+                // 1. DESCANSANDO (RESTAURADO: Tarjeta Amarilla Interactiva)
+                const isActiveBreakCard =
+                  idx === 0 &&
+                  typeKey === "break-start";
+
+                if (isActiveBreakCard) {
+                  return (
+                    <div
+                      key={e.id}
+                      onClick={async () => {
+                         // ALerta: Usuario quiere que al terminar descanso se registre "Entrada trabajo" (clock-in)
+                         // y aparezca la tarjeta azul normal.
+                         // Usamos quickRegister("clock-in") directamente.
+                         const ok = await quickRegister("clock-in");
+                         if (ok) handleAction("working");
+                      }}
+                      className="group flex items-center gap-4 p-3 rounded-xl border-l-4 border-amber-500 bg-amber-500 shadow-md shadow-amber-500/20 cursor-pointer animate-in fade-in transition-all active:scale-[0.99]"
+                    >
+                      <div
+                        className="size-10 rounded-full bg-black/10 flex items-center justify-center shrink-0 group-hover:bg-black/20 transition-colors"
+                      >
+                        <span
+                          className="material-symbols-outlined text-xl text-slate-900"
+                        >
+                          play_arrow
+                        </span>
+                      </div>
+
+                      <div className="flex-1 flex justify-center">
+                        <p className="font-bold text-slate-900 text-base">
+                          Terminar descanso
+                        </p>
+                      </div>
+
+                      {durationLabel && (
+                        <div className="text-right">
+                           <span className="text-xs font-bold text-slate-900 bg-white/20 px-2 py-1 rounded-md">
+                             {durationLabel}
+                           </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                // 2. SALIDA (OTROS)
+                const isActiveOthersOut = idx === 0 && typeKey === "others-out";
+
+                if (isActiveOthersOut) {
+                   return (
+                    <div
+                      key={e.id}
+                      onClick={async () => {
+                        // Registrar vuelta como "clock-in" (Entrada Trabajo)
+                        // Para unificar flujo según petición usuario.
+                        const ok = await quickRegister("clock-in");
+                        if (ok) handleAction("working");
+                      }}
+                      className="group flex items-center gap-4 p-3 rounded-xl border-l-4 border-pink-600 bg-pink-500 shadow-md shadow-pink-500/20 cursor-pointer animate-in fade-in transition-all active:scale-[0.99]"
+                    >
+                      <div
+                        className="size-10 rounded-full bg-black/10 flex items-center justify-center shrink-0 group-hover:bg-black/20 transition-colors"
+                      >
+                         {/* Icono de vuelta */}
+                        <span
+                          className="material-symbols-outlined text-xl text-slate-900"
+                        >
+                          play_arrow
+                        </span>
+                      </div>
+
+                      <div className="flex-1 flex justify-center">
+                        <p className="font-bold text-slate-900 text-base">
+                          Terminar permiso
+                        </p>
+                      </div>
+
+                      {durationLabel && (
+                        <div className="text-right">
+                           <span className="text-xs font-bold text-slate-900 bg-white/20 px-2 py-1 rounded-md">
+                             {durationLabel}
+                           </span>
+                        </div>
+                      )}
+                    </div>
+                   );
+                }
+                
+                // Renderizado normal (historial)
                 return (
                   <div
                     key={e.id}
@@ -1118,21 +1393,20 @@ const DashboardScreen: React.FC = () => {
 
                     <div className="flex-1">
                       <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">
-                        {e.description ?? meta.label}
+                        {displayLabel}
                       </p>
                       <p className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold">
                         {timeCell} • {meta.label}
                       </p>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteEntry(e.id)}
-                      className="text-[10px] font-bold text-red-300 hover:text-red-200"
-                      title="Eliminar"
-                    >
-                      Eliminar
-                    </button>
+                    {durationLabel && (
+                      <div className="text-right">
+                         <span className="text-xs font-bold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
+                           {durationLabel}
+                         </span>
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -1143,7 +1417,7 @@ const DashboardScreen: React.FC = () => {
         {/* Chart (decorativo) */}
         <section className="bg-white dark:bg-surface-dark p-6 rounded-3xl border border-slate-100 dark:border-slate-800/50 shadow-sm mb-4">
           <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-5">
-            Distribución de Tiempo (Anual)
+            Distribución de Tiempo Anual
           </h4>
           <div className="flex items-center justify-around gap-4">
             <div className="relative flex items-center justify-center">
@@ -1310,50 +1584,43 @@ const DashboardScreen: React.FC = () => {
 
                 <button
                   type="button"
-                  disabled={!canBreakStart}
-                  onClick={() => setEntryType("break-start")}
+                  disabled={!canBreakStart && !canBreakEnd}
+                  onClick={() => {
+                     // Toggle lógico
+                     if (canBreakStart) setEntryType("break-start");
+                     else if (canBreakEnd) setEntryType("break-end");
+                  }}
                   className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border
                     ${
-                      entryType === "break-start"
+                      (entryType === "break-start" || entryType === "break-end")
                         ? "bg-amber-500 text-white border-amber-500 shadow-md"
                         : "bg-amber-500 text-white-500 border-gray-200 dark:border-gray-700 hover:border-amber-500"
                     }
-                    ${!canBreakStart ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
+                    ${(!canBreakStart && !canBreakEnd) ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
                 >
                   <span className="material-symbols-outlined text-[18px]">
-                    coffee
+                    {canBreakStart ? "coffee" : "play_arrow"}
                   </span>{" "}
-                  Inicio Descanso
+                  {canBreakStart ? "Descanso" : "Terminar Descanso"}
                 </button>
 
+                {/* PERMISO (Toggle) */}
                 <button
                   type="button"
-                  disabled={!canBreakEnd}
-                  onClick={() => setEntryType("break-end")}
-                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border
-                    ${
-                      entryType === "break-end"
-                        ? "bg-emerald-500 text-white border-emerald-500 shadow-md"
-                        : "bg-emerald-500 text-white-500 border-gray-200 dark:border-gray-700 hover:border-emerald-500"
-                    }
-                    ${!canBreakEnd ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
-                >
-                  <span className="material-symbols-outlined text-[18px]">
-                    play_arrow
-                  </span>{" "}
-                  Fin Descanso
-                </button>
-
-                {/* SALIDA (OTROS) */}
-                <button
-                  type="button"
-                  disabled={!canOthersOut}
-                  onClick={() => setEntryType("others-out")}
+                  disabled={!canOthersOut && !canOthersIn}
+                  onClick={() => {
+                     if (canOthersOut) {
+                        setReasonText("");
+                        setShowReasonModal(true);
+                     } else if (canOthersIn) {
+                        setEntryType("others-in");
+                     }
+                  }}
                   className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ring-4
                     ${
-                      canOthersOut
+                      (canOthersOut || canOthersIn)
                         ? `bg-pink-500 text-white border-pink-500 shadow-md ${
-                            entryType === "others-out"
+                            (entryType === "others-out" || entryType === "others-in")
                               ? "ring-pink-500/30"
                               : "ring-transparent hover:opacity-90"
                           }`
@@ -1361,31 +1628,9 @@ const DashboardScreen: React.FC = () => {
                     }`}
                 >
                   <span className="material-symbols-outlined text-[18px]">
-                    edit_note
+                    {canOthersOut ? "edit_note" : "history_edu"}
                   </span>{" "}
-                  Salida (Otros)
-                </button>
-
-                {/* ENTRADA (OTROS) */}
-                <button
-                  type="button"
-                  disabled={!canOthersIn}
-                  onClick={() => setEntryType("others-in")}
-                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ring-4
-                    ${
-                      canOthersIn
-                        ? `bg-pink-500 text-white border-pink-500 shadow-md ${
-                            entryType === "others-in"
-                              ? "ring-pink-500/30"
-                              : "ring-transparent hover:opacity-90"
-                          }`
-                        : "bg-pink-500 text-white border-pink-500 shadow-none ring-transparent opacity-50 cursor-not-allowed pointer-events-none"
-                    }`}
-                >
-                  <span className="material-symbols-outlined text-[18px]">
-                    history_edu
-                  </span>{" "}
-                  Entrada (Otros)
+                  {canOthersOut ? "Permiso" : "Terminar Permiso"}
                 </button>
               </div>
             </div>
@@ -1464,6 +1709,95 @@ const DashboardScreen: React.FC = () => {
               </button>
             </div>
           </form>
+        </div>
+      </div>
+
+      {/* Reason Modal (Simple) */}
+      
+       <div
+        className={`fixed inset-0 z-[70] flex items-center justify-center p-4 transition-all duration-200 ${
+          showReasonModal ? "visible opacity-100" : "invisible opacity-0"
+        }`}
+      >
+        <div
+          onClick={() => setShowReasonModal(false)}
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        ></div>
+
+        <div
+          className={`relative w-full max-w-sm bg-white dark:bg-surface-dark rounded-2xl shadow-2xl overflow-hidden transition-transform duration-300 ease-out border border-slate-100 dark:border-slate-800 ${
+            showReasonModal ? "scale-100 transform-none" : "scale-95 translate-y-4"
+          }`}
+        >
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+                Motivo del permiso
+              </h3>
+              <button
+                onClick={() => setShowReasonModal(false)}
+                className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-500"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            
+            <input
+              autoFocus
+              className="block w-full px-4 py-3 rounded-xl border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-pink-500 focus:border-pink-500 text-base shadow-sm outline-none border transition-colors mb-6"
+              type="text"
+              placeholder="Ej: Visita médica..."
+              value={reasonText}
+              onChange={(e) => setReasonText(e.target.value)}
+              onKeyDown={(e) => {
+                 if(e.key === 'Enter' && reasonText.trim()) {
+                    // Trigger save
+                    const btn = document.getElementById('save-reason-btn');
+                    btn?.click();
+                 }
+              }}
+            />
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowReasonModal(false)}
+                className="flex-1 py-3 px-4 rounded-xl font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                id="save-reason-btn"
+                disabled={!reasonText.trim()}
+                onClick={async () => {
+                  if (!reasonText.trim()) return;
+                  
+                  const now = new Date();
+                  const res = await insertTimeEntryValidated({
+                    type: "others-out",
+                    occurredAt: now,
+                    description: "Permiso: " + reasonText,
+                    dateISO: isoDate(now),
+                    timeHHMM: nowHHMM(),
+                  });
+
+                  if (res.ok) {
+                    setShowReasonModal(false);
+                    // Asumimos que al salir por otros, queda en estado "out" (o similar para activar others-in)
+                    handleAction("out"); 
+                    // Forzamos refresh para ver la tarjeta rosa
+                    loadTodayEntries(isoDate(now));
+                  }
+                }}
+                className={`flex-1 py-3 px-4 rounded-xl font-bold text-white shadow-lg shadow-pink-500/30 transition-all active:scale-95 ${
+                  reasonText.trim() 
+                    ? "bg-pink-500 hover:bg-pink-600 cursor-pointer" 
+                    : "bg-pink-400 opacity-50 cursor-not-allowed"
+                }`}
+              >
+                Guardar
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
