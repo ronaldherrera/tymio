@@ -1,7 +1,50 @@
 
-import React, { useState, useMemo, useContext } from 'react';
+import React, { useState, useMemo, useContext, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppContext } from '../App';
+import { DEFAULT_AVATAR } from '../constants';
+import { supabase } from '../services/supabase';
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+
+const minutesToLabel = (mins: number) => {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h <= 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+};
+
+const typeMeta = (t: string | null | undefined) => {
+  const type = (t ?? "").toLowerCase();
+  switch (type) {
+    case "clock-in":
+      return { label: "Entrada trabajo", icon: "login", color: "primary" as const };
+    case "clock-out":
+      return { label: "Salida trabajo", icon: "logout", color: "slate" as const };
+    case "break-start":
+      return { label: "Inicio descanso", icon: "coffee", color: "amber" as const };
+    case "break-end":
+      return { label: "Fin descanso", icon: "play_arrow", color: "emerald" as const };
+    case "others-in":
+      return { label: "Fin Permiso", icon: "history_edu", color: "pink" as const };
+    case "others-out":
+      return { label: "Permiso", icon: "edit_note", color: "pink" as const };
+    default:
+      return { label: "Registro", icon: "schedule", color: "primary" as const };
+  }
+};
+
+const colorClasses = (c: "primary" | "slate" | "amber" | "emerald" | "pink") => {
+  switch (c) {
+    case "slate": return { border: "border-slate-500", iconBg: "bg-slate-500/10", iconText: "text-slate-500" };
+    case "amber": return { border: "border-amber-500", iconBg: "bg-amber-500/10", iconText: "text-amber-500" };
+    case "emerald": return { border: "border-emerald-500", iconBg: "bg-emerald-500/10", iconText: "text-emerald-500" };
+    case "pink": return { border: "border-pink-500", iconBg: "bg-pink-500/10", iconText: "text-pink-500" };
+    case "primary": default: return { border: "border-primary", iconBg: "bg-primary/10", iconText: "text-primary" };
+  }
+};
 
 const HistoryScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -12,6 +55,37 @@ const HistoryScreen: React.FC = () => {
   
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [historyEntries, setHistoryEntries] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      if (!user) return;
+      setLoadingHistory(true);
+      const dateStr = isoDate(selectedDate);
+      
+      // Rango del día seleccionado
+      const start = `${dateStr}T00:00:00`;
+      const end = `${dateStr}T23:59:59`;
+
+      const { data, error } = await supabase
+        .from('time_entries')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('occurred_at', start)
+        .lte('occurred_at', end)
+        .order('occurred_at', { ascending: false });
+
+      if (!error && data) {
+         setHistoryEntries(data);
+      } else {
+         setHistoryEntries([]);
+      }
+      setLoadingHistory(false);
+    };
+
+    fetchHistory();
+  }, [selectedDate, user]);
 
   const monthNames = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -66,8 +140,9 @@ const HistoryScreen: React.FC = () => {
   };
 
   const dailyDistribution = useMemo(() => [
-    { label: 'Trabajando', hours: '8h 15m', value: 68, color: '#135bec' },
-    { label: 'Descansando', hours: '1h 00m', value: 12, color: '#f59e0b' },
+    { label: 'Trabajando', hours: '7h 45m', value: 65, color: '#135bec' },
+    { label: 'Descansando', hours: '1h 00m', value: 10, color: '#f59e0b' },
+    { label: 'Permiso', hours: '0h 30m', value: 5, color: '#ec4899' },
     { label: 'Libre', hours: '2h 45m', value: 20, color: '#475569' },
   ], [selectedDate]);
 
@@ -107,6 +182,8 @@ const HistoryScreen: React.FC = () => {
     );
   };
 
+  const [isEditingHistory, setIsEditingHistory] = useState(false);
+
   return (
     <div className="relative flex h-full min-h-screen w-full flex-col overflow-x-hidden max-w-md mx-auto shadow-xl bg-background-light dark:bg-background-dark pb-32">
       {/* Header */}
@@ -119,27 +196,28 @@ const HistoryScreen: React.FC = () => {
           <div 
             onClick={() => navigate('/profile')} 
             className="bg-center bg-no-repeat bg-cover rounded-full size-10 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all" 
-            style={{backgroundImage: `url("https://picsum.photos/seed/${user.id}/100/100")`}}
+            style={{backgroundImage: `url("${user.user_metadata?.avatar_url || DEFAULT_AVATAR}")`}}
           ></div>
         </div>
       </div>
 
       <div className="flex-1 px-4 py-6 flex flex-col gap-6">
         {/* Calendar Controller */}
-        <div className="flex items-center justify-between px-2 bg-white dark:bg-surface-dark p-4 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800/50">
-          <button onClick={prevMonth} className="p-2 rounded-xl text-gray-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-none bg-transparent cursor-pointer">
-            <span className="material-symbols-outlined">chevron_left</span>
+        {/* Calendar Controller */}
+        <div className="flex items-center justify-between px-2 bg-white dark:bg-surface-dark py-2 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800/50">
+          <button onClick={prevMonth} className="p-1 rounded-lg text-gray-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-none bg-transparent cursor-pointer">
+            <span className="material-symbols-outlined text-[20px]">chevron_left</span>
           </button>
           <div className="flex flex-col items-center">
-            <span className="text-gray-900 dark:text-white font-black text-lg tracking-tight">
+            <span className="text-gray-900 dark:text-white font-bold text-base tracking-tight">
               {monthNames[currentDate.getMonth()]}
             </span>
-            <span className="text-slate-400 dark:text-slate-500 text-xs font-bold uppercase tracking-widest">
+            <span className="text-slate-400 dark:text-slate-500 text-[10px] font-bold uppercase tracking-widest">
               {currentDate.getFullYear()}
             </span>
           </div>
-          <button onClick={nextMonth} className="p-2 rounded-xl text-gray-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-none bg-transparent cursor-pointer">
-            <span className="material-symbols-outlined">chevron_right</span>
+          <button onClick={nextMonth} className="p-1 rounded-lg text-gray-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-none bg-transparent cursor-pointer">
+            <span className="material-symbols-outlined text-[20px]">chevron_right</span>
           </button>
         </div>
 
@@ -211,58 +289,111 @@ const HistoryScreen: React.FC = () => {
           </div>
           
           <div className="space-y-3">
-            <h4 className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest px-1">Registros de Actividad</h4>
-            <div className="flex items-center gap-4 p-4 rounded-2xl bg-white dark:bg-surface-dark border border-slate-100 dark:border-slate-800/50 shadow-sm">
-              <div className="size-10 rounded-full bg-slate-600/10 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-slate-600 text-xl">logout</span>
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">Salida Trabajo</p>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">Final de jornada</p>
-              </div>
-              <div className="text-right">
-                <span className="text-sm font-black text-slate-900 dark:text-white">18:30</span>
-              </div>
+            <div className="flex items-center justify-between px-1">
+              <h4 className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Registros de Actividad</h4>
+              <button 
+                onClick={() => setIsEditingHistory(!isEditingHistory)}
+                className={`text-xs font-bold transition-colors cursor-pointer border-none bg-transparent ${isEditingHistory ? 'text-primary' : 'text-slate-400 hover:text-slate-600'}`}
+              >
+                {isEditingHistory ? 'Terminar' : 'Editar'}
+              </button>
             </div>
+
             
-            <div className="flex items-center gap-4 p-4 rounded-2xl bg-white dark:bg-surface-dark border border-slate-100 dark:border-slate-800/50 shadow-sm">
-              <div className="size-10 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-emerald-600 text-xl">play_arrow</span>
+            {historyEntries.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-slate-600">
+                <span className="material-symbols-outlined text-4xl mb-2">history_toggle_off</span>
+                <p className="text-sm font-medium">No hay actividad este día</p>
               </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">Fin Descanso</p>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">Retorno a tareas</p>
-              </div>
-              <div className="text-right">
-                <span className="text-sm font-black text-slate-900 dark:text-white">15:15</span>
-              </div>
-            </div>
+            ) : (
+              historyEntries.map((e, idx) => {
+                const meta = typeMeta(e.entry_type);
+                const c = colorClasses(meta.color);
+                
+                const occurred = e.occurred_at ? new Date(e.occurred_at) : new Date(e.created_at);
+                const timeCell = occurred.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 
-            <div className="flex items-center gap-4 p-4 rounded-2xl bg-white dark:bg-surface-dark border border-slate-100 dark:border-slate-800/50 shadow-sm">
-              <div className="size-10 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-amber-600 text-xl">coffee</span>
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">Inicio Descanso</p>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">Pausa comida</p>
-              </div>
-              <div className="text-right">
-                <span className="text-sm font-black text-slate-900 dark:text-white">14:30</span>
-              </div>
-            </div>
+                // Duración
+                let durationLabel = null;
+                const type = (e.entry_type ?? "").toLowerCase();
+                
+                 if (
+                  type === "clock-in" ||
+                  type === "break-start" ||
+                  type === "clock-out" ||
+                  type === "others-out"
+                ) {
+                  const msCurrent = occurred.getTime();
+                  const parsedNext = idx > 0 ? historyEntries[idx - 1] : null;
+                  let msNext = new Date().getTime(); // Default to now if latest
+                  
+                  // Si no es hoy, y es el último registro, quizás deberíamos cerrar el día o no mostrar tiempo?
+                  // Por simplicidad, si es el último del día mostrado (el más reciente) y es el día actual, usamos "ahora".
+                  // Si es un día pasado, usamos fin del día o siguiente entrada.
+                  // Simplificación: Usamos logica dashboard
+                  
+                  if (parsedNext) {
+                     msNext = parsedNext.occurred_at
+                      ? new Date(parsedNext.occurred_at).getTime()
+                      : new Date(parsedNext.created_at).getTime();
+                  } else if (!isToday(selectedDate.getDate())) {
+                      // Si es el ultimo registro de un dia PASADO, no calculamos duración "hasta ahora"
+                      // Podríamos setearlo a null o fin de jornada. Lo dejamos null para no mostrar info errónea.
+                      durationLabel = null; 
+                  }
+                  
+                  if (parsedNext || isToday(selectedDate.getDate())) {
+                     const diff = msNext - msCurrent;
+                     if (diff > 0) {
+                        durationLabel = minutesToLabel(Math.floor(diff / 1000 / 60));
+                     }
+                  }
+                }
 
-            <div className="flex items-center gap-4 p-4 rounded-2xl bg-white dark:bg-surface-dark border border-slate-100 dark:border-slate-800/50 shadow-sm">
-              <div className="size-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-primary text-xl">login</span>
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">Entrada Trabajo</p>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">Inicio de jornada</p>
-              </div>
-              <div className="text-right">
-                <span className="text-sm font-black text-slate-900 dark:text-white">09:00</span>
-              </div>
-            </div>
+                // Ocultar break-end y others-in
+                if (type === 'break-end' || type === 'others-in') return null;
+
+                const stateTitles: Record<string, string> = {
+                  "clock-in": "Trabajando",
+                  "clock-out": "Salida",
+                  "break-start": "Descanso",
+                  "break-end": "Entrada",
+                  "others-in": "Fin Permiso",
+                };
+
+                const isStandard = Object.keys(stateTitles).includes(type);
+                let displayLabel = isStandard ? stateTitles[type] : e.description ?? meta.label;
+                 if (type === "others-out") {
+                   const rawDesc = e.description || "";
+                   displayLabel = rawDesc.replace(/^Permiso:\s*/i, "").replace(/^Salida:\s*/i, "") || "Permiso";
+                }
+
+                return (
+                  <div key={e.id} className={`flex items-center gap-4 p-3 rounded-xl border-l-4 ${c.border} bg-white dark:bg-surface-dark shadow-sm group animate-in fade-in transition-all delay-[${idx * 50}ms]`}>
+                    <div className={`size-10 rounded-full ${c.iconBg} flex items-center justify-center shrink-0`}>
+                      <span className={`material-symbols-outlined text-xl ${c.iconText}`}>{meta.icon}</span>
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">{displayLabel}</p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold">{timeCell} • {meta.label}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                       {durationLabel && (
+                          <span className="text-xs font-bold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md transition-all">
+                           {durationLabel}
+                          </span>
+                       )}
+                      
+                      <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isEditingHistory ? 'w-8 opacity-100 ml-1' : 'w-0 opacity-0 ml-0'}`}>
+                        <button className="size-8 rounded-lg bg-slate-50 dark:bg-white/5 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all cursor-pointer border-none shrink-0">
+                          <span className="material-symbols-outlined text-[18px]">delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       </div>

@@ -12,6 +12,7 @@ import React, { useEffect, useMemo, useState, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppContext } from "../App";
 import { supabase } from "../services/supabase";
+import { DEFAULT_AVATAR } from "../constants";
 
 type EntryType =
   | "clock-in"
@@ -1039,7 +1040,7 @@ const DashboardScreen: React.FC = () => {
           onClick={() => navigate("/profile")}
           className="bg-center bg-no-repeat bg-cover rounded-full size-12 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all"
           style={{
-            backgroundImage: `url("https://picsum.photos/seed/${user?.id ?? "anon"}/100/100")`,
+            backgroundImage: `url("${user.user_metadata?.avatar_url || DEFAULT_AVATAR}")`,
           }}
         ></div>
       </header>

@@ -3,6 +3,7 @@ import React, { useContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppContext } from '../App';
 import { supabase } from '../services/supabase';
+import { DEFAULT_AVATAR } from '../constants';
 
 const ProfileScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -27,6 +28,52 @@ const ProfileScreen: React.FC = () => {
     }
   }, [message]);
 
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    try {
+      setUploading(true);
+      if (!event.target.files || event.target.files.length === 0) {
+        throw new Error('Debes seleccionar una imagen para subir.');
+      }
+
+      const file = event.target.files[0];
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${user.id}/${Date.now()}.${fileExt}`;
+      const filePath = `${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, file);
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
+      const publicUrl = data.publicUrl;
+
+      const { data: userData, error: updateError } = await supabase.auth.updateUser({
+        data: { avatar_url: publicUrl }
+      });
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      if (userData.user) {
+        setUser(userData.user);
+        setMessage({ type: 'success', text: 'Foto de perfil actualizada' });
+      }
+    } catch (error: any) {
+      console.error('Error uploading avatar:', error);
+      setMessage({ type: 'error', text: error.message || 'Error al actualizar la foto de perfil.' });
+    } finally {
+      setUploading(false);
+    }
+  };
+
 
 
 
@@ -46,16 +93,33 @@ const ProfileScreen: React.FC = () => {
         <div className="flex p-4 flex-col items-center pt-8">
           <div className="relative group cursor-pointer">
             <div 
-              className="bg-center bg-no-repeat aspect-square bg-cover rounded-full h-28 w-28 ring-4 ring-background-light dark:ring-background-dark shadow-lg" 
-              style={{backgroundImage: `url("https://picsum.photos/seed/${user.id}/200/200")`}}
-            ></div>
-            <div className="absolute bottom-0 right-0 bg-primary text-white rounded-full p-2 flex items-center justify-center shadow-md transform translate-x-1 translate-y-1">
+              className="bg-center bg-no-repeat aspect-square bg-cover rounded-full h-28 w-28 ring-4 ring-background-light dark:ring-background-dark shadow-lg relative" 
+              style={{backgroundImage: `url("${user.user_metadata?.avatar_url || DEFAULT_AVATAR}")`}}
+            >
+              {uploading && (
+                <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center">
+                  <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                </div>
+              )}
+            </div>
+            <div 
+              onClick={() => fileInputRef.current?.click()}
+              className="absolute bottom-0 right-0 bg-primary text-white rounded-full p-2 flex items-center justify-center shadow-md transform translate-x-1 translate-y-1 cursor-pointer hover:bg-primary/90 transition-colors"
+            >
               <span className="material-symbols-outlined text-[18px]">photo_camera</span>
             </div>
+            <input
+              type="file"
+              id="avatar"
+              ref={fileInputRef}
+              accept="image/*"
+              onChange={handleAvatarUpload}
+              style={{ display: 'none' }}
+            />
           </div>
           <div className="flex flex-col items-center justify-center mt-4 gap-1">
             <p className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em] text-center">{displayName}</p>
-            <p className="text-text-secondary text-base font-medium text-center">{user.role}</p>
+
             <span className="inline-flex items-center gap-x-1.5 py-1 px-3 rounded-full text-xs font-medium bg-primary/10 text-primary mt-1">
               ID: {user.id}
             </span>
@@ -195,6 +259,20 @@ const ProfileScreen: React.FC = () => {
               </label>
             </div>
           </div>
+        </div>
+
+        <div className="mt-8 mb-8 mx-4">
+          <button 
+            onClick={async () => {
+              await supabase.auth.signOut();
+              setIsLoggedIn(false);
+            }}
+            className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 font-bold text-base transition-colors hover:bg-red-100 dark:hover:bg-red-500/20 border-none cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[20px]">logout</span>
+            Cerrar Sesión
+          </button>
+          <p className="text-center text-xs text-slate-400 dark:text-slate-600 mt-4 font-medium">Versión 1.0.0</p>
         </div>
       </div>
 
