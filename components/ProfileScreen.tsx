@@ -1,14 +1,34 @@
 
-import React, { useContext, useState } from 'react';
+import React, { useContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppContext } from '../App';
+import { supabase } from '../services/supabase';
 
 const ProfileScreen: React.FC = () => {
   const navigate = useNavigate();
-  const { user, setIsLoggedIn } = useContext(AppContext);
+  const { user, setUser, setIsLoggedIn } = useContext(AppContext);
   const [showModal, setShowModal] = useState(false);
   const [entryType, setEntryType] = useState<'clock-in' | 'clock-out' | 'break-start' | 'break-end' | 'others-in' | 'others-out'>('clock-in');
   const [context, setContext] = useState('');
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  // Fallback name logic: prioritize user_metadata.full_name -> user.name -> email username
+  const displayName = user.user_metadata?.full_name || user.name || user.email?.split('@')[0] || 'Usuario';
+  
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [tempName, setTempName] = useState('');
+
+  useEffect(() => {
+    if (message) {
+      const timer = setTimeout(() => {
+        setMessage(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
+
+
+
 
   return (
     <div className="relative flex h-full min-h-screen w-full flex-col overflow-x-hidden max-w-md mx-auto shadow-2xl bg-background-light dark:bg-background-dark pb-32">
@@ -34,7 +54,7 @@ const ProfileScreen: React.FC = () => {
             </div>
           </div>
           <div className="flex flex-col items-center justify-center mt-4 gap-1">
-            <p className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em] text-center">{user.name}</p>
+            <p className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em] text-center">{displayName}</p>
             <p className="text-text-secondary text-base font-medium text-center">{user.role}</p>
             <span className="inline-flex items-center gap-x-1.5 py-1 px-3 rounded-full text-xs font-medium bg-primary/10 text-primary mt-1">
               ID: {user.id}
@@ -49,7 +69,63 @@ const ProfileScreen: React.FC = () => {
               <label className="text-xs text-text-secondary font-medium mb-1">Nombre Completo</label>
               <div className="flex items-center">
                 <span className="material-symbols-outlined text-text-secondary mr-3 text-[20px]">person</span>
-                <input readOnly className="flex-1 bg-transparent border-none p-0 text-slate-900 dark:text-white focus:ring-0 text-base font-medium outline-none" defaultValue={user.name}/>
+                <input 
+                  readOnly={!isEditingName}
+                  className={`flex-1 bg-transparent border-none p-0 text-slate-900 dark:text-white text-base font-medium outline-none transition-colors ${isEditingName ? 'border-b border-primary/50' : ''}`} 
+                  value={isEditingName ? tempName : displayName}
+                  onChange={(e) => setTempName(e.target.value)}
+                  ref={(input) => { if (isEditingName && input) input.focus(); }}
+                />
+                
+                {/* Actions */}
+                <div className="flex items-center gap-1 ml-2">
+                  {!isEditingName ? (
+                    <button 
+                      onClick={() => {
+                        setTempName(displayName);
+                        setIsEditingName(true);
+                      }}
+                      className="p-1 text-slate-400 hover:text-primary transition-colors cursor-pointer border-none bg-transparent"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">edit</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button 
+                        onClick={async () => {
+                          if (!tempName.trim()) {
+                            setMessage({ type: 'error', text: 'El nombre no puede estar vacío' });
+                            return;
+                          }
+                          const { data, error } = await supabase.auth.updateUser({
+                            data: { full_name: tempName }
+                          });
+                          if (error) {
+                            setMessage({ type: 'error', text: error.message });
+                          } else {
+                            if (data.user) {
+                              setUser(data.user);
+                            }
+                            setMessage({ type: 'success', text: 'Nombre actualizado' });
+                            setIsEditingName(false);
+                          }
+                        }}
+                        className="p-1 text-green-500 hover:text-green-600 transition-colors cursor-pointer border-none bg-transparent"
+                      >
+                         <span className="material-symbols-outlined text-[20px]">check</span>
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setIsEditingName(false);
+                          setTempName(displayName);
+                        }}
+                        className="p-1 text-red-500 hover:text-red-600 transition-colors cursor-pointer border-none bg-transparent"
+                      >
+                        <span className="material-symbols-outlined text-[20px]">close</span>
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex flex-col px-4 py-3 border-b border-gray-100 dark:border-border-dark/50">
@@ -59,16 +135,31 @@ const ProfileScreen: React.FC = () => {
                 <input readOnly className="flex-1 bg-transparent border-none p-0 text-slate-900 dark:text-white focus:ring-0 text-base font-medium outline-none" defaultValue={user.email}/>
               </div>
             </div>
-            <div className="flex flex-col px-4 py-3 opacity-70">
-              <label className="text-xs text-text-secondary font-medium mb-1">Departamento</label>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center">
-                  <span className="material-symbols-outlined text-text-secondary mr-3 text-[20px]">domain</span>
-                  <span className="text-slate-900 dark:text-white text-base font-medium">{user.dept}</span>
+
+
+
+          </div>
+        </div>
+
+
+        <div className="mt-6">
+          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Empresa</h3>
+          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
+            <button 
+              onClick={() => setMessage({ type: 'info', text: 'Esta opción aún no está disponible' })}
+              className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <div className="size-8 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-500">
+                  <span className="material-symbols-outlined text-[20px]">business</span>
                 </div>
-                <span className="material-symbols-outlined text-text-secondary text-[18px]">lock</span>
+                <div className="flex flex-col">
+                  <span className="text-slate-900 dark:text-white font-medium text-base">Vincular Empresa</span>
+                  <span className="text-xs text-text-secondary">Conectar con un espacio de trabajo</span>
+                </div>
               </div>
-            </div>
+              <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+            </button>
           </div>
         </div>
 
@@ -78,37 +169,46 @@ const ProfileScreen: React.FC = () => {
             <button className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer">
               <div className="flex items-center gap-3">
                 <div className="size-8 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500">
-                  <span className="material-symbols-outlined text-[20px]">key</span>
+                  <span className="material-symbols-outlined text-[20px]">password</span>
                 </div>
-                <span className="text-slate-900 dark:text-white font-medium text-base">Cambiar Contraseña</span>
+                <div className="flex flex-col">
+                  <span className="text-slate-900 dark:text-white font-medium text-base">Cambiar Contraseña</span>
+                  <span className="text-xs text-text-secondary">Actualizar clave de acceso</span>
+                </div>
               </div>
               <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
             </button>
-            <div className="flex items-center justify-between px-4 py-3">
+
+            <div className="flex items-center justify-between px-4 py-4">
               <div className="flex items-center gap-3">
                 <div className="size-8 rounded-full bg-green-500/10 flex items-center justify-center text-green-500">
                   <span className="material-symbols-outlined text-[20px]">face</span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-slate-900 dark:text-white font-medium text-base">Face ID</span>
-                  <span className="text-xs text-text-secondary">Usar biométricos para entrar</span>
+                  <span className="text-xs text-text-secondary">Usar biométricos</span>
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
-                <input defaultChecked className="sr-only peer" type="checkbox"/>
+                <input defaultChecked className="sr-only peer" type="checkbox" />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
               </label>
             </div>
           </div>
         </div>
+      </div>
 
-        <div className="mt-8 px-4 pb-8">
-          <button onClick={() => setIsLoggedIn(false)} className="w-full bg-white dark:bg-surface-dark border border-red-200 dark:border-red-900/30 text-red-600 dark:text-red-400 font-bold py-3.5 px-4 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors flex items-center justify-center gap-2 border-none cursor-pointer">
-            <span className="material-symbols-outlined text-[20px]">logout</span>
-            Cerrar Sesión
-          </button>
-          <p className="text-center text-text-secondary text-xs mt-4">Versión 2.4.0 (Build 1024)</p>
-        </div>
+      {/* Toast Notification */}
+      <div 
+        className={`fixed top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full shadow-lg z-[100] transition-all duration-300 pointer-events-none flex items-center gap-2
+        ${message ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}
+        ${message?.type === 'error' ? 'bg-red-500 text-white' : ''}
+        ${message?.type === 'success' ? 'bg-green-500 text-white' : ''}
+        ${message?.type === 'info' ? 'bg-slate-700 text-white' : ''}
+        `}
+      >
+        {message?.type === 'info' && <span className="material-symbols-outlined text-[18px]">info</span>}
+        <span className="text-sm font-medium">{message?.text}</span>
       </div>
 
       {/* Consistent Bottom Navigation */}
