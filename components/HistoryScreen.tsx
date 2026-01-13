@@ -6,11 +6,17 @@ import { DEFAULT_AVATAR } from '../constants';
 import { supabase } from '../services/supabase';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
-const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+const isoDate = (d: Date) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const minutesToLabel = (mins: number) => {
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
+  const rounded = Math.round(mins);
+  const h = Math.floor(rounded / 60);
+  const m = rounded % 60;
   if (h <= 0) return `${m}m`;
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
@@ -57,6 +63,13 @@ const HistoryScreen: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [historyEntries, setHistoryEntries] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Form states
+  const [editingEntry, setEditingEntry] = useState<any>(null);
+  const [formDate, setFormDate] = useState(isoDate(new Date()));
+  const [formTime, setFormTime] = useState('08:00');
+  const [formTimeEnd, setFormTimeEnd] = useState('');
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -85,7 +98,144 @@ const HistoryScreen: React.FC = () => {
     };
 
     fetchHistory();
-  }, [selectedDate, user]);
+    fetchHistory();
+  }, [selectedDate, user, refreshKey]);
+
+  const handleRefresh = () => setRefreshKey(k => k + 1);
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("¿Seguro que quieres eliminar este registro?")) return;
+    
+    const { error } = await supabase.from('time_entries').delete().eq('id', id);
+    if (error) {
+       console.error(error);
+       alert("Error al eliminar");
+    } else {
+       handleRefresh();
+    }
+  };
+
+  const openAddModal = () => {
+    setEditingEntry(null);
+    setEntryType('clock-in');
+    setContext('');
+    setFormDate(isoDate(selectedDate)); // Default to selected date
+    const now = new Date();
+    setFormTime(`${pad2(now.getHours())}:${pad2(now.getMinutes())}`);
+    setFormTimeEnd('');
+    setShowModal(true);
+  };
+
+  const openEditModal = (entry: any) => {
+    setEditingEntry(entry);
+    setEntryType(entry.entry_type);
+    setContext(entry.description || ''); // Simple context mapping
+    
+    const d = entry.occurred_at ? new Date(entry.occurred_at) : new Date(entry.created_at);
+    setFormDate(isoDate(d));
+    setFormTime(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`);
+    setFormTimeEnd('');
+    
+    setShowModal(true);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+
+    // Helper to construct Date
+    const makeDate = (dateStr: string, timeStr: string) => {
+       const [y, m, d] = dateStr.split('-').map(Number);
+       const [hh, mm] = timeStr.split(':').map(Number);
+       return new Date(y, m - 1, d, hh, mm);
+    };
+
+    const isIntervalBreak = !editingEntry && (entryType as any) === 'break-interval';
+    const isIntervalOthers = !editingEntry && (entryType as any) === 'others-interval';
+
+    let error = null;
+
+    if (isIntervalBreak || isIntervalOthers) {
+       // INTERVAL SAVE (2 records)
+       if (!formTimeEnd) {
+          alert("Debes indicar hora de inicio y fin");
+          return;
+       }
+       const startAt = makeDate(formDate, formTime);
+       const endAt = makeDate(formDate, formTimeEnd);
+
+       if (endAt <= startAt) {
+          alert("La hora de fin debe ser posterior al inicio");
+          return;
+       }
+
+       const typeStart = isIntervalBreak ? 'break-start' : 'others-out';
+       const typeEnd = isIntervalBreak ? 'break-end' : 'others-in';
+       
+       const desc = isIntervalOthers ? context : typeMeta(typeStart).label;
+
+       // 1. Insert Start
+       const { error: err1 } = await supabase.from('time_entries').insert({
+          user_id: user.id,
+          entry_type: typeStart,
+          description: desc,
+          occurred_at: startAt.toISOString(),
+          date: formDate,
+          entry_time: formTime
+       });
+       if (err1) error = err1;
+       else {
+          // 2. Insert End
+          const { error: err2 } = await supabase.from('time_entries').insert({
+            user_id: user.id,
+            entry_type: typeEnd,
+            description: isIntervalOthers ? "Fin Permiso" : typeMeta(typeEnd).label, // Usually end has generic desc
+            occurred_at: endAt.toISOString(),
+            date: formDate,
+            entry_time: formTimeEnd
+         });
+         error = err2;
+       }
+
+    } else {
+      // SINGLE SAVE (Insert or Update)
+      const occurredAt = makeDate(formDate, formTime);
+      
+      const payload = {
+        user_id: user.id,
+        entry_type: entryType,
+        description: (entryType === 'others-in' || entryType === 'others-out') ? context : (typeMeta(entryType).label),
+        occurred_at: occurredAt.toISOString(),
+        date: formDate, // Legacy/Redundant
+        entry_time: formTime, // Legacy
+      };
+
+      if (editingEntry) {
+        // Update
+        const { error: err } = await supabase
+          .from('time_entries')
+          .update(payload)
+          .eq('id', editingEntry.id);
+        error = err;
+      } else {
+        // Insert
+        const { error: err } = await supabase
+          .from('time_entries')
+          .insert(payload);
+        error = err;
+      }
+    }
+
+    if (error) {
+      console.error(error);
+      alert("Error al guardar");
+    } else {
+      setShowModal(false);
+      setContext('');
+      setEditingEntry(null);
+      handleRefresh();
+    }
+  };
 
   const monthNames = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -139,12 +289,91 @@ const HistoryScreen: React.FC = () => {
            selectedDate.getFullYear() === currentDate.getFullYear();
   };
 
-  const dailyDistribution = useMemo(() => [
-    { label: 'Trabajando', hours: '7h 45m', value: 65, color: '#135bec' },
-    { label: 'Descansando', hours: '1h 00m', value: 10, color: '#f59e0b' },
-    { label: 'Permiso', hours: '0h 30m', value: 5, color: '#ec4899' },
-    { label: 'Libre', hours: '2h 45m', value: 20, color: '#475569' },
-  ], [selectedDate]);
+  const dailyDistribution = useMemo(() => {
+    // 1. Sort ascending
+    const sorted = [...historyEntries].sort((a, b) => {
+      const da = a.occurred_at ? new Date(a.occurred_at) : new Date(a.created_at);
+      const db = b.occurred_at ? new Date(b.occurred_at) : new Date(b.created_at);
+      return da.getTime() - db.getTime();
+    });
+
+    let w = 0, b = 0, o = 0;
+    
+    // We want to calculate intervals.
+    // Start of calculation: 00:00 of selectedDate
+    let lastTime = new Date(selectedDate);
+    lastTime.setHours(0,0,0,0);
+    
+    let lastState = 'out'; // Assumed start state
+
+    const mapTypeToState = (t: string) => {
+      t = (t || '').toLowerCase();
+      if (t === 'clock-in') return 'working';
+      if (t === 'break-start') return 'break';
+      if (t === 'break-end') return 'working';
+      if (t === 'others-out') return 'others';
+      if (t === 'others-in') return 'working';
+      if (t === 'clock-out') return 'out';
+      return 'out';
+    };
+
+    // Calculate duration for each interval
+    sorted.forEach(e => {
+        const time = e.occurred_at ? new Date(e.occurred_at) : new Date(e.created_at);
+        // Clamp time to selectedDate (just in case)
+        
+        const diffMins = (time.getTime() - lastTime.getTime()) / 1000 / 60;
+        if (diffMins > 0) {
+           if (lastState === 'working') w += diffMins;
+           else if (lastState === 'break') b += diffMins;
+           else if (lastState === 'others') o += diffMins;
+        }
+        
+        lastTime = time;
+        lastState = mapTypeToState(e.entry_type);
+    });
+
+    // Final interval: from last event to Now (if today) or 23:59:59 (if past)
+    const isSelToday = 
+      selectedDate.getDate() === new Date().getDate() &&
+      selectedDate.getMonth() === new Date().getMonth() &&
+      selectedDate.getFullYear() === new Date().getFullYear();
+
+    let endTime = new Date(selectedDate);
+    if (isSelToday) {
+       endTime = new Date(); // now
+    } else {
+       endTime.setHours(23, 59, 59, 999);
+    }
+
+    if (lastTime < endTime) {
+       const diff = (endTime.getTime() - lastTime.getTime()) / 1000 / 60;
+       if (diff > 0) {
+           if (lastState === 'working') w += diff;
+           else if (lastState === 'break') b += diff;
+           else if (lastState === 'others') o += diff;
+       }
+    }
+
+    const totalDay = 1440; // 24h * 60m
+    const trackedStats = w + b + o;
+    // Free is whatever is left of the day (including "out" time)
+    // For "Today", should we count future time as free? 
+    // Usually "Libre" implies "Not Working/Break/Others" in the 24h cycle?
+    // Or just "Time passed while Out"?
+    // The previous mockup had "Libre" + others summing to ~12h? 
+    // Let's assume Libre = 24h - (Work+Break+Permission).
+    const f = Math.max(0, totalDay - trackedStats);
+
+    const p = (val: number) => Math.round((val / totalDay) * 100);
+
+    return [
+      { label: 'Trabajando', hours: minutesToLabel(w), value: p(w), color: '#135bec' },
+      { label: 'Descansando', hours: minutesToLabel(b), value: p(b), color: '#f59e0b' },
+      { label: 'Permiso', hours: minutesToLabel(o), value: p(o), color: '#ec4899' },
+      { label: 'Libre', hours: minutesToLabel(f), value: p(f), color: '#475569' },
+    ];
+  }, [historyEntries, selectedDate]);
 
   const renderMiniDonut = () => {
     let cumulativePercent = 0;
@@ -385,9 +614,23 @@ const HistoryScreen: React.FC = () => {
                        )}
                       
                       <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isEditingHistory ? 'w-8 opacity-100 ml-1' : 'w-0 opacity-0 ml-0'}`}>
-                        <button className="size-8 rounded-lg bg-slate-50 dark:bg-white/5 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all cursor-pointer border-none shrink-0">
-                          <span className="material-symbols-outlined text-[18px]">delete</span>
-                        </button>
+                        {idx === 0 ? (
+                          <button 
+                            onClick={() => handleDelete(e.id)}
+                            className="size-8 rounded-lg bg-slate-50 dark:bg-white/5 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all cursor-pointer border-none shrink-0" 
+                            title="Eliminar último registro"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={() => openEditModal(e)}
+                            className="size-8 rounded-lg bg-slate-50 dark:bg-white/5 flex items-center justify-center text-slate-400 hover:text-primary hover:bg-primary/10 transition-all cursor-pointer border-none shrink-0" 
+                            title="Editar registro"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">edit</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -410,7 +653,7 @@ const HistoryScreen: React.FC = () => {
           {/* Center: Add (Floating/Protruding Circle) */}
           <div className="absolute -top-7 left-1/2 -translate-x-1/2">
             <button 
-              onClick={() => setShowModal(true)} 
+              onClick={openAddModal} 
               className="size-16 rounded-full bg-primary text-white shadow-xl shadow-primary/30 flex items-center justify-center border-4 border-background-light dark:border-background-dark active:scale-90 transition-transform cursor-pointer"
             >
               <span className="material-symbols-outlined text-4xl">add</span>
@@ -432,38 +675,102 @@ const HistoryScreen: React.FC = () => {
         <div onClick={() => { setShowModal(false); setContext(''); }} className="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
         <div className={`relative w-full max-w-md bg-white dark:bg-surface-dark rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden transition-transform duration-300 ease-out ${showModal ? 'translate-y-0' : 'translate-y-full'}`}>
           <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Añadir Registro Manual</h3>
-            <button onClick={() => { setShowModal(false); setContext(''); }} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-500 border-none bg-transparent cursor-pointer">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+              {editingEntry ? 'Editar Registro' : 'Añadir Registro Manual'}
+            </h3>
+            <button onClick={() => { setShowModal(false); setContext(''); setEditingEntry(null); }} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-500 border-none bg-transparent cursor-pointer">
               <span className="material-symbols-outlined">close</span>
             </button>
           </div>
-          <form className="p-5 space-y-4 no-scrollbar max-h-[85vh] overflow-y-auto" onSubmit={(e) => { e.preventDefault(); setShowModal(false); setContext(''); }}>
+          <form className="p-5 space-y-4 no-scrollbar max-h-[85vh] overflow-y-auto" onSubmit={handleSave}>
             <div className="space-y-3">
               <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tipo de Registro</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setEntryType('clock-in')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'clock-in' ? 'bg-primary text-white border-primary shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-primary'}`}>
+              <div className="grid grid-cols-2 gap-3">
+                {/* ENTRADA */}
+                <button 
+                  type="button" 
+                  onClick={() => setEntryType('clock-in')} 
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
+                    entryType === 'clock-in' 
+                      ? 'bg-primary text-white border-primary shadow-md opacity-100 ring-2 ring-primary/20' 
+                      : 'bg-primary text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
+                  }`}
+                >
                   <span className="material-symbols-outlined text-[18px]">login</span> Entrada
                 </button>
-                <button type="button" onClick={() => setEntryType('clock-out')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'clock-out' ? 'bg-slate-600 text-white border-slate-600 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-slate-600'}`}>
+
+                {/* SALIDA */}
+                <button 
+                  type="button" 
+                  onClick={() => setEntryType('clock-out')} 
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
+                    entryType === 'clock-out' 
+                      ? 'bg-slate-600 text-white border-slate-600 shadow-md opacity-100 ring-2 ring-slate-600/20' 
+                      : 'bg-slate-600 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
+                  }`}
+                >
                   <span className="material-symbols-outlined text-[18px]">logout</span> Salida
                 </button>
-                <button type="button" onClick={() => setEntryType('break-start')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'break-start' ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-amber-500'}`}>
-                  <span className="material-symbols-outlined text-[18px]">coffee</span> Inicio Descanso
+
+                {/* DESCANSO (Toggle if editing, Interval if adding) */}
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    if (editingEntry) {
+                       if (entryType === 'break-start') setEntryType('break-end');
+                       else setEntryType('break-start');
+                    } else {
+                       // ADD MODE: Just set interval type
+                       setEntryType('break-interval' as any);
+                    }
+                  }} 
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
+                    (entryType === 'break-start' || entryType === 'break-end' || (entryType as any) === 'break-interval')
+                      ? 'bg-amber-500 text-white border-amber-500 shadow-md opacity-100 ring-2 ring-amber-500/20' 
+                      : 'bg-amber-500 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-[18px]">
+                    {entryType === 'break-end' ? 'play_arrow' : 'coffee'}
+                  </span> 
+                  {/* Label logic: If editing, show specific. If adding, show generic "Descanso" */}
+                  {editingEntry 
+                    ? (entryType === 'break-end' ? 'Fin Descanso' : 'Inicio Descanso')
+                    : 'Descanso'
+                  }
                 </button>
-                <button type="button" onClick={() => setEntryType('break-end')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'break-end' ? 'bg-emerald-500 text-white border-emerald-500 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-emerald-500'}`}>
-                  <span className="material-symbols-outlined text-[18px]">play_arrow</span> Fin Descanso
-                </button>
-                {/* Reordered "Otros" Buttons: Salida (Otros) left, Entrada (Otros) right */}
-                <button type="button" onClick={() => setEntryType('others-out')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'others-out' ? 'bg-pink-400 text-white border-pink-400 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-pink-400'}`}>
-                  <span className="material-symbols-outlined text-[18px]">edit_note</span> Salida (Otros)
-                </button>
-                <button type="button" onClick={() => setEntryType('others-in')} className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${entryType === 'others-in' ? 'bg-pink-500 text-white border-pink-500 shadow-md' : 'bg-transparent text-gray-500 border-gray-200 dark:border-gray-700 hover:border-pink-500'}`}>
-                  <span className="material-symbols-outlined text-[18px]">history_edu</span> Entrada (Otros)
+
+                {/* PERMISO (Toggle if editing, Interval if adding) */}
+                <button 
+                  type="button" 
+                  onClick={() => {
+                     if (editingEntry) {
+                        if (entryType === 'others-out') setEntryType('others-in');
+                        else setEntryType('others-out');
+                     } else {
+                        // ADD MODE: Just set interval type
+                        setEntryType('others-interval' as any);
+                     }
+                  }} 
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
+                    (entryType === 'others-out' || entryType === 'others-in' || (entryType as any) === 'others-interval')
+                      ? 'bg-pink-500 text-white border-pink-500 shadow-md opacity-100 ring-2 ring-pink-500/20' 
+                      : 'bg-pink-500 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-[18px]">
+                    {(entryType === 'others-in' || (entryType as any) === 'others-interval') ? 'history_edu' : 'edit_note'}
+                  </span>
+                  {editingEntry 
+                    ? (entryType === 'others-in' ? 'Fin Permiso' : 'Permiso')
+                    : 'Permiso'
+                  }
                 </button>
               </div>
             </div>
 
-            {(entryType === 'others-in' || entryType === 'others-out') && (
+            {/* Context for others */}
+            {((entryType === 'others-in' || entryType === 'others-out' || (entryType as any) === 'others-interval')) && (
               <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2 duration-300">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contexto / Motivo</label>
                 <input 
@@ -479,15 +786,58 @@ const HistoryScreen: React.FC = () => {
 
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Fecha</label>
-              <input className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border" type="date" defaultValue={selectedDate.toISOString().split('T')[0]}/>
+              <input 
+                className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border" 
+                type="date" 
+                value={formDate}
+                onChange={(e) => setFormDate(e.target.value)}
+              />
             </div>
-            <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hora</label>
-              <input className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border" type="time" defaultValue="08:00"/>
-            </div>
+            
+            {/* Conditional Time Inputs: Single vs Range */}
+            {((entryType as any) === 'break-interval' || (entryType as any) === 'others-interval') ? (
+               <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hora Inicio</label>
+                    <input 
+                      className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border" 
+                      type="time" 
+                      value={formTime}
+                      onChange={(e) => setFormTime(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hora Fin</label>
+                    <input 
+                      className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border" 
+                      type="time" 
+                      value={formTimeEnd}
+                      onChange={(e) => setFormTimeEnd(e.target.value)}
+                    />
+                  </div>
+               </div>
+            ) : (
+                <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Hora</label>
+                <input 
+                  className="block w-full px-3 py-2.5 rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white focus:ring-primary focus:border-primary text-sm shadow-sm outline-none border" 
+                  type="time" 
+                  value={formTime}
+                  onChange={(e) => setFormTime(e.target.value)}
+                />
+              </div>
+            )}
+            
             <div className="flex items-center gap-3 pt-2">
-              <button onClick={() => { setShowModal(false); setContext(''); }} className="flex-1 py-3 px-4 rounded-xl text-center text-sm font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors border-none bg-transparent cursor-pointer" type="button">Cancelar</button>
-              <button className={`flex-1 py-3 px-4 rounded-xl text-white text-sm font-bold shadow-lg transition-all hover:opacity-90 border-none cursor-pointer ${(entryType === 'others-in' || entryType === 'others-out') ? 'bg-pink-500 shadow-pink-500/25' : 'bg-primary shadow-primary/25'}`} type="submit">Guardar</button>
+              <button onClick={() => { setShowModal(false); setContext(''); setEditingEntry(null); }} className="flex-1 py-3 px-4 rounded-xl text-center text-sm font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors border-none bg-transparent cursor-pointer" type="button">Cancelar</button>
+              <button className={`flex-1 py-3 px-4 rounded-xl text-white text-sm font-bold shadow-lg transition-all hover:opacity-90 border-none cursor-pointer ${
+                (entryType === 'clock-out') ? 'bg-slate-600 shadow-slate-600/25' :
+                (entryType === 'break-start' || entryType === 'break-end' || (entryType as any) === 'break-interval') ? 'bg-amber-500 shadow-amber-500/25' :
+                (entryType === 'others-in' || entryType === 'others-out' || (entryType as any) === 'others-interval') ? 'bg-pink-500 shadow-pink-500/25' :
+                'bg-primary shadow-primary/25'
+              }`} type="submit">
+                {editingEntry ? 'Actualizar' : 'Guardar'}
+              </button>
             </div>
           </form>
         </div>
