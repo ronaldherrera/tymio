@@ -2,6 +2,7 @@ import React, { useContext, useMemo, useState } from "react";
 import { AppContext } from "../App";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
+import { Logo } from "./Logo";
 
 const LoginScreen: React.FC = () => {
   const { setIsLoggedIn } = useContext(AppContext); // lo mantenemos por compatibilidad con tu App actual
@@ -47,13 +48,15 @@ const LoginScreen: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-background-light dark:bg-background-dark">
       <div className="w-full max-w-[480px] h-full flex flex-col relative">
         <div className="flex flex-col items-center justify-center py-8">
-          <div className="h-20 w-20 bg-gradient-to-br from-primary to-blue-600 rounded-2xl shadow-glow flex items-center justify-center mb-6 text-white transform rotate-3 hover:rotate-0 transition-transform duration-300">
-            <span className="material-symbols-outlined text-[40px]">schedule</span>
+          <div className="flex items-center gap-4 mb-8 transform hover:scale-105 transition-transform duration-300">
+             <Logo className="h-12 w-12 drop-shadow-xl" />
+             <span className="text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-none">Tymio</span>
           </div>
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-center text-slate-900 dark:text-white">
+          
+          <h1 className="text-2xl font-bold tracking-tight text-center text-slate-900 dark:text-white/90">
             Bienvenido
           </h1>
-          <p className="text-slate-500 dark:text-[#92a4c9] mt-3 text-center text-base font-medium">
+          <p className="text-slate-500 dark:text-[#92a4c9] mt-2 text-center text-sm font-medium">
             Controla tu tiempo, maximiza tu día
           </p>
         </div>
@@ -71,7 +74,7 @@ const LoginScreen: React.FC = () => {
               </div>
               <input
                 className="block w-full h-14 pl-12 pr-4 rounded-xl border-0 bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] focus:ring-2 focus:ring-inset focus:ring-primary dark:focus:ring-primary sm:text-base sm:leading-6 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#92a4c9] shadow-sm transition-all outline-none"
-                placeholder="nombre@empresa.com"
+                placeholder="usuario@email.com"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -138,22 +141,13 @@ const LoginScreen: React.FC = () => {
             </div>
           )}
 
-          <div className="flex gap-3 mt-2">
+          <div className="mt-2">
             <button
               type="submit"
               disabled={!canSubmit}
-              className="flex-1 h-14 bg-primary hover:bg-blue-600 disabled:opacity-60 text-white font-bold rounded-xl shadow-glow shadow-blue-900/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+              className="w-full h-14 bg-primary hover:bg-blue-600 disabled:opacity-60 text-white font-bold rounded-xl shadow-glow shadow-blue-900/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
             >
               <span>{loading ? "Entrando..." : "Iniciar Sesión"}</span>
-            </button>
-
-            <button
-              aria-label="Face ID Login"
-              className="h-14 w-14 bg-white dark:bg-surface-dark hover:bg-slate-50 dark:hover:bg-[#202b40] ring-1 ring-inset ring-slate-200 dark:ring-[#324467] rounded-xl flex items-center justify-center text-primary transition-all active:scale-[0.95]"
-              type="button"
-              onClick={() => setMessage({ type: "error", text: "Face ID/Apple/Google lo activamos después." })}
-            >
-              <span className="material-symbols-outlined text-[28px]">face</span>
             </button>
           </div>
         </form>
@@ -164,21 +158,10 @@ const LoginScreen: React.FC = () => {
           <div className="h-px bg-slate-200 dark:bg-[#324467] flex-1"></div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div>
           <button
             type="button"
-            className="h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group"
-            onClick={() => setMessage({ type: "error", text: "Apple login lo configuramos después en Supabase." })}
-          >
-            <span className="material-symbols-outlined text-2xl text-slate-900 dark:text-white group-hover:scale-110 transition-transform">
-              smartphone
-            </span>
-            <span className="text-sm font-semibold text-slate-700 dark:text-white">Apple</span>
-          </button>
-
-          <button
-            type="button"
-            className="h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group"
+            className="w-full h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group"
             onClick={() => setMessage({ type: "error", text: "Google login lo configuramos después en Supabase." })}
           >
             <div className="w-5 h-5 rounded-full border-4 border-l-blue-500 border-t-red-500 border-r-yellow-400 border-b-green-500 group-hover:rotate-90 transition-transform duration-500"></div>

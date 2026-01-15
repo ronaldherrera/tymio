@@ -13,6 +13,7 @@ import { useNavigate } from "react-router-dom";
 import { AppContext } from "../App";
 import { supabase } from "../services/supabase";
 import { DEFAULT_AVATAR } from "../constants";
+import { Logo } from "./Logo"; // Nuevo import
 
 type EntryType =
   | "clock-in"
@@ -100,15 +101,15 @@ const typeMeta = (t: string | null | undefined) => {
       };
     case "break-end":
       return {
-        label: "Fin descanso",
-        icon: "play_arrow",
-        color: "emerald" as const,
+        label: "Entrada trabajo",
+        icon: "login",
+        color: "primary" as const,
       };
     case "others-in":
       return {
-        label: "Fin Permiso",
-        icon: "history_edu",
-        color: "pink" as const,
+        label: "Entrada trabajo",
+        icon: "login",
+        color: "primary" as const,
       };
     case "others-out":
       return {
@@ -396,28 +397,25 @@ const DashboardScreen: React.FC = () => {
 
   // Chart decorativo
   const chartData = useMemo(
-    () => [
+    () => {
+      const totalDay = 1440; // 24h
+      // Asumimos que yearWorkMins et al. ahora contienen valores DIARIOS
+      const w = yearWorkMins;
+      const b = yearBreakMins;
+      const o = yearOthersMins;
+      const trackedStats = w + b + o;
+      const f = Math.max(0, totalDay - trackedStats);
 
-      { 
-        label: "Trabajando", 
-        hours: minutesToLabel(yearWorkMins).replace("h", "h ").replace("m", "m"), // Formato visual
-        value: yearTotalMins > 0 ? Math.round((yearWorkMins / yearTotalMins) * 100) : 0, 
-        color: "#135bec" // Primary Blue
-      },
-      { 
-        label: "Descansando", 
-        hours: minutesToLabel(yearBreakMins).replace("h", "h ").replace("m", "m"), 
-        value: yearTotalMins > 0 ? Math.round((yearBreakMins / yearTotalMins) * 100) : 0, 
-        color: "#f59e0b" // Amber
-      },
-      { 
-        label: "Permiso", 
-        hours: minutesToLabel(yearOthersMins).replace("h", "h ").replace("m", "m"), 
-        value: yearTotalMins > 0 ? Math.round((yearOthersMins / yearTotalMins) * 100) : 0, 
-        color: "#ec4899" // Pink
-      },
-    ],
-    [yearWorkMins, yearBreakMins, yearOthersMins, yearTotalMins],
+      const p = (val: number) => Math.round((val / totalDay) * 100);
+
+      return [
+        { label: "Trabajando", hours: minutesToLabel(w), value: p(w), color: "#135bec" },
+        { label: "Descansando", hours: minutesToLabel(b), value: p(b), color: "#f59e0b" },
+        { label: "Permiso", hours: minutesToLabel(o), value: p(o), color: "#ec4899" },
+        { label: "Libre", hours: minutesToLabel(f), value: p(f), color: "#475569" },
+      ];
+    },
+    [yearWorkMins, yearBreakMins, yearOthersMins],
   );
 
   const renderDonut = () => {
@@ -425,7 +423,24 @@ const DashboardScreen: React.FC = () => {
     const size = 120;
     const center = size / 2;
     const radius = 45;
-    const strokeWidth = 18;
+    const strokeWidth = 18; // Más gordo como pidió el usuario
+
+    // Caso especial: 100% de CUALQUIER concepto
+    const fullItem = chartData.find(d => d.value >= 99); 
+    if (fullItem) {
+       return (
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="transform -rotate-90 drop-shadow-sm shrink-0">
+           <circle
+             cx={center}
+             cy={center}
+             r={radius}
+             fill="none"
+             stroke={fullItem.color}
+             strokeWidth={strokeWidth}
+           />
+        </svg>
+       );
+    }
 
     return (
       <svg
@@ -434,16 +449,13 @@ const DashboardScreen: React.FC = () => {
         viewBox={`0 0 ${size} ${size}`}
         className="transform -rotate-90 drop-shadow-sm"
       >
-        {(() => {
-          let cumulativePercent = 0;
-          return chartData.map((item, index) => {
+        {chartData.map((item, index) => {
+           if (item.value <= 0) return null;
+           
             const startPercent = cumulativePercent;
             const endPercent = cumulativePercent + item.value;
             cumulativePercent = endPercent;
 
-            // Ajuste visual: Si todos son "round", los extremos se extienden.
-            // Para evitar solapamientos feos en valores pequeños, a veces se ajustan los ángulos,
-            // pero con el diseño estándar de stroke-dasharray o paths simples, el round se dibuja centrado en el extremo.
             const startAngle = (startPercent / 100) * 2 * Math.PI;
             const endAngle = (endPercent / 100) * 2 * Math.PI;
 
@@ -451,12 +463,10 @@ const DashboardScreen: React.FC = () => {
             const y1 = center + radius * Math.sin(startAngle);
             const x2 = center + radius * Math.cos(endAngle);
             const y2 = center + radius * Math.sin(endAngle);
-
+            
             const largeArcFlag = item.value > 50 ? 1 : 0;
-            const pathData = [
-              `M ${x1} ${y1}`,
-              `A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`,
-            ].join(" ");
+            
+            const pathData = [`M ${x1} ${y1}`, `A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`].join(' ');
 
             return (
               <path
@@ -466,11 +476,9 @@ const DashboardScreen: React.FC = () => {
                 stroke={item.color}
                 strokeWidth={strokeWidth}
                 strokeLinecap="round"
-                style={{ zIndex: index }} // Orden secuencial simple
               />
             );
-          });
-        })()}
+        })}
       </svg>
     );
   };
@@ -545,26 +553,35 @@ const DashboardScreen: React.FC = () => {
       setWeekTotalMins(total);
     }
 
-    // 2. Año: CÁLCULO REAL ITERATIVO
-    // Recuperamos TODAS las entradas del año ordenadas cronológicamente
-    const { data: yearEntries, error: yearEntriesErr } = await supabase
+    // 2. Diario (Antes Año): CÁLCULO REAL ITERATIVO (HOY)
+    // Recuperamos TODAS las entradas de HOY ordenadas cronológicamente
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    // Check initial state from BEFORE today? 
+    // Ideally yes, but for simplicity we assume 'out' or fetch last entry before today.
+    // Let's try to fetch last entry before today to be clearer?
+    // For now, let's proceed with current logic but scoped to today.
+    
+    const { data: dayEntries, error: dayEntriesErr } = await supabase
       .from("time_entries")
       .select("entry_type, occurred_at, created_at")
       .eq("user_id", authUser.id)
-      .gte("occurred_at", yearStart.toISOString())
+      .gte("occurred_at", dayStart.toISOString())
       .lte("occurred_at", now.toISOString())
       .order("occurred_at", { ascending: true }); // Importante: ascendente para reconstruir historia
 
-    if (yearEntriesErr || !yearEntries) return;
+    if (dayEntriesErr || !dayEntries) return;
 
     let wMins = 0;
     let bMins = 0;
     let oMins = 0;
     
-    // Estado inicial al principio del año (asumimos 'out' si no hay nada previo, 
-    // o podríamos buscar el último del año pasado, pero simplificamos a 'out' start)
+    // Estado inicial al principio del día
+    // (Asumimos 'out' si no hay registros o deberíamos buscar el último de ayer... 
+    //  Si el usuarió fichó ayer y no salió, hoy amanecería trabajando. 
+    //  Simplificación: 'out')
     let lastState: "working" | "break" | "others" | "out" = "out";
-    let lastTime = yearStart.getTime(); 
+    let lastTime = dayStart.getTime(); 
 
     // Helper para mapear tipo a estado
     const mapTypeToState = (type: string): "working" | "break" | "others" | "out" => {
@@ -578,7 +595,11 @@ const DashboardScreen: React.FC = () => {
        return "out"; 
     };
 
-    for (const e of yearEntries) {
+    // INTENTO DE MEJORA: Buscar estado inicial real si hay entradas previas hoy? No, "dayEntries" son las de hoy.
+    // Si queremos precisión de turno nocturno, deberíamos consultar último estado antes de dayStart.
+    // (Dejamos pendiente si el usuario lo pide).
+
+    for (const e of dayEntries) {
        const eTime = e.occurred_at ? new Date(e.occurred_at).getTime() : new Date(e.created_at).getTime();
        
        // Calcular delta desde el último evento
@@ -588,7 +609,6 @@ const DashboardScreen: React.FC = () => {
           if (lastState === "working") wMins += diffMins;
           else if (lastState === "break") bMins += diffMins;
           else if (lastState === "others") oMins += diffMins;
-          // 'out' no lo sumamos explícitamente aquí, lo calcularemos por diferencia o acumulado
        }
 
        // Actualizar estado y tiempo
@@ -881,14 +901,14 @@ const DashboardScreen: React.FC = () => {
     // Mantengo las validaciones inmediatas con estado local para UX rápida,
     // pero la validación real "a prueba" la hace insertTimeEntryValidated contra BD.
 
-    if (type === "clock-in" && currentMode !== "out" && currentMode !== "break" && currentMode !== "others") {
+    if (type === "clock-in" && liveMode !== "out" && liveMode !== "break" && liveMode !== "others") {
       setMessage({
         type: "error",
         text: "Ya estás en jornada. Registra una salida antes de volver a entrar.",
       });
       return false;
     }
-    if (type === "break-start" && currentMode !== "working") {
+    if (type === "break-start" && liveMode !== "working") {
       setMessage({
         type: "error",
         text: "Debes entrar antes de inicar descanso",
@@ -896,7 +916,7 @@ const DashboardScreen: React.FC = () => {
       return false;
     }
 
-    if (type === "break-end" && currentMode !== "break") {
+    if (type === "break-end" && liveMode !== "break") {
       setMessage({
         type: "error",
         text: "Inicia descanso antes de terminarlo",
@@ -904,11 +924,11 @@ const DashboardScreen: React.FC = () => {
       return false;
     }
 
-    if (type === "clock-out" && currentMode !== "working") {
+    if (type === "clock-out" && liveMode !== "working") {
       setMessage({
         type: "error",
         text:
-          currentMode === "break"
+          liveMode === "break"
             ? "No puedes salir mientras estás en descanso. Registra primero Fin descanso."
             : "No puedes registrar salida si no estás trabajando.",
       });
@@ -1026,19 +1046,23 @@ const DashboardScreen: React.FC = () => {
 
   return (
     <div className="bg-background-light dark:bg-background-dark text-slate-900 dark:text-white font-display overflow-x-hidden min-h-screen flex flex-col max-w-md mx-auto relative shadow-2xl pb-32">
-      <header className="w-full flex items-center justify-between p-4 pt-6 bg-background-light dark:bg-background-dark sticky top-0 z-10">
-        <div className="flex flex-col">
-          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 tracking-tighter">
-            {formatDateShort(currentTime)} • {formatTimeShort(currentTime)}
-          </span>
-          <h2 className="text-xl font-bold leading-tight tracking-tight">
+      <header className="w-full flex items-center justify-between p-4 pt-6 bg-background-light dark:bg-background-dark sticky top-0 z-10 relative">
+        {/* Izquierda: Logo */}
+        <div className="flex items-center justify-center">
+           <Logo className="h-10 w-10 drop-shadow-md" />
+        </div>
+
+        {/* Centro: Título App */}
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pt-2">
+           <h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
             Tymio
           </h2>
         </div>
 
+        {/* Derecha: Avatar */}
         <div
           onClick={() => navigate("/profile")}
-          className="bg-center bg-no-repeat bg-cover rounded-full size-12 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all"
+          className="bg-center bg-no-repeat bg-cover rounded-full size-10 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all"
           style={{
             backgroundImage: `url("${user.user_metadata?.avatar_url || DEFAULT_AVATAR}")`,
           }}
@@ -1231,7 +1255,9 @@ const DashboardScreen: React.FC = () => {
                   type === "clock-in" ||
                   type === "break-start" ||
                   type === "clock-out" ||
-                  type === "others-out"
+                  type === "others-out" ||
+                  type === "break-end" ||
+                  type === "others-in"
                 ) {
                   const msCurrent = occurred.getTime();
                   // El evento "siguiente" en cronología es el índice anterior en la lista (porque está ordenado descendente)
@@ -1257,20 +1283,21 @@ const DashboardScreen: React.FC = () => {
                 }
 
                 // Ocultar "break-end" y "others-in" de la lista visual (limpieza)
-                if (
-                  (e.entry_type ?? "").toLowerCase() === "break-end" ||
-                  (e.entry_type ?? "").toLowerCase() === "others-in"
-                ) {
-                  return null;
-                }
+                // Se muestran todos (incluyendo break-end y others-in)
+                // if (
+                //   (e.entry_type ?? "").toLowerCase() === "break-end" ||
+                //   (e.entry_type ?? "").toLowerCase() === "others-in"
+                // ) {
+                //   return null;
+                // }
 
                 // Títulos de estado específicos
                 const stateTitles: Record<string, string> = {
                   "clock-in": "Trabajando",
                   "clock-out": "Salida",
                   "break-start": "Descanso",
-                  "break-end": "Entrada", // Unificado
-                  "others-in": "Fin Permiso",
+                  "break-end": "Trabajando", // Unificado visualmente
+                  "others-in": "Trabajando",
                 };
 
                 const typeKey = (e.entry_type ?? "").toLowerCase();
@@ -1304,7 +1331,8 @@ const DashboardScreen: React.FC = () => {
                          const ok = await quickRegister("clock-in");
                          if (ok) handleAction("working");
                       }}
-                      className="group flex items-center gap-4 p-3 rounded-xl border-l-4 border-amber-500 bg-amber-500 shadow-md shadow-amber-500/20 cursor-pointer animate-in fade-in transition-all active:scale-[0.99]"
+                      className="group flex items-center gap-4 p-3 rounded-xl border-l-4 border-amber-500 bg-amber-500 shadow-md shadow-amber-500/20 cursor-pointer animate-fadeInUp active:scale-[0.99]"
+                      style={{ animationDelay: `${idx * 0.05}s`, animationFillMode: 'both' }}
                     >
                       <div
                         className="size-10 rounded-full bg-black/10 flex items-center justify-center shrink-0 group-hover:bg-black/20 transition-colors"
@@ -1346,7 +1374,8 @@ const DashboardScreen: React.FC = () => {
                         const ok = await quickRegister("clock-in");
                         if (ok) handleAction("working");
                       }}
-                      className="group flex items-center gap-4 p-3 rounded-xl border-l-4 border-pink-600 bg-pink-500 shadow-md shadow-pink-500/20 cursor-pointer animate-in fade-in transition-all active:scale-[0.99]"
+                      className="group flex items-center gap-4 p-3 rounded-xl border-l-4 border-pink-600 bg-pink-500 shadow-md shadow-pink-500/20 cursor-pointer animate-fadeInUp active:scale-[0.99]"
+                      style={{ animationDelay: `${idx * 0.05}s`, animationFillMode: 'both' }}
                     >
                       <div
                         className="size-10 rounded-full bg-black/10 flex items-center justify-center shrink-0 group-hover:bg-black/20 transition-colors"
@@ -1380,7 +1409,8 @@ const DashboardScreen: React.FC = () => {
                 return (
                   <div
                     key={e.id}
-                    className={`flex items-center gap-4 p-3 rounded-xl border-l-4 ${c.border} bg-white dark:bg-surface-dark shadow-sm`}
+                    className={`flex items-center gap-4 p-3 rounded-xl border-l-4 ${c.border} bg-white dark:bg-surface-dark shadow-sm animate-fadeInUp`}
+                    style={{ animationDelay: `${idx * 0.05}s`, animationFillMode: 'both' }}
                   >
                     <div
                       className={`size-10 rounded-full ${c.iconBg} flex items-center justify-center shrink-0`}
@@ -1418,7 +1448,7 @@ const DashboardScreen: React.FC = () => {
         {/* Chart (decorativo) */}
         <section className="bg-white dark:bg-surface-dark p-6 rounded-3xl border border-slate-100 dark:border-slate-800/50 shadow-sm mb-4">
           <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-5">
-            Distribución de Tiempo Anual
+            Distribución del Día
           </h4>
           <div className="flex items-center justify-around gap-4">
             <div className="relative flex items-center justify-center">
@@ -1432,23 +1462,23 @@ const DashboardScreen: React.FC = () => {
                 </span>
               </div>
             </div>
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2.5 flex-1 w-full ml-4">
               {chartData.map((item, idx) => (
-                <div key={idx} className="flex items-center gap-3">
-                  <div
-                    className="w-3 h-3 rounded-full"
-                    style={{ backgroundColor: item.color }}
-                  ></div>
-                  <div className="flex flex-col">
-                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                <div key={idx} className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: item.color }}
+                    ></div>
+                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400 truncate">
                       {item.label}
                     </span>
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-sm font-bold">{item.hours}</span>
-                      <span className="text-[11px] font-light text-slate-400 dark:text-slate-500">
-                        ({item.value}%)
-                      </span>
-                    </div>
+                  </div>
+                  <div className="flex items-baseline gap-1.5 shrink-0 ml-2">
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100">{item.hours}</span>
+                    <span className="text-[9px] font-light text-slate-400 dark:text-slate-500">
+                      {item.value}%
+                    </span>
                   </div>
                 </div>
               ))}
@@ -1716,7 +1746,7 @@ const DashboardScreen: React.FC = () => {
       {/* Reason Modal (Simple) */}
       
        <div
-        className={`fixed inset-0 z-[70] flex items-center justify-center p-4 transition-all duration-200 ${
+        className={`fixed inset-0 z-[70] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 ${
           showReasonModal ? "visible opacity-100" : "invisible opacity-0"
         }`}
       >
@@ -1726,8 +1756,8 @@ const DashboardScreen: React.FC = () => {
         ></div>
 
         <div
-          className={`relative w-full max-w-sm bg-white dark:bg-surface-dark rounded-2xl shadow-2xl overflow-hidden transition-transform duration-300 ease-out border border-slate-100 dark:border-slate-800 ${
-            showReasonModal ? "scale-100 transform-none" : "scale-95 translate-y-4"
+          className={`relative w-full max-w-sm bg-white dark:bg-surface-dark rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden transition-transform duration-300 ease-out border border-slate-100 dark:border-slate-800 ${
+            showReasonModal ? "translate-y-0" : "translate-y-full"
           }`}
         >
           <div className="p-6">

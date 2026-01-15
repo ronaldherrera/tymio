@@ -32,9 +32,9 @@ const typeMeta = (t: string | null | undefined) => {
     case "break-start":
       return { label: "Inicio descanso", icon: "coffee", color: "amber" as const };
     case "break-end":
-      return { label: "Fin descanso", icon: "play_arrow", color: "emerald" as const };
+      return { label: "Entrada trabajo", icon: "login", color: "primary" as const };
     case "others-in":
-      return { label: "Fin Permiso", icon: "history_edu", color: "pink" as const };
+      return { label: "Entrada trabajo", icon: "login", color: "primary" as const };
     case "others-out":
       return { label: "Permiso", icon: "edit_note", color: "pink" as const };
     default:
@@ -71,6 +71,22 @@ const HistoryScreen: React.FC = () => {
   const [formTime, setFormTime] = useState('08:00');
   const [formTimeEnd, setFormTimeEnd] = useState('');
 
+  // Estados para Modal de Borrado UI
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [entryToDelete, setEntryToDelete] = useState<{id: string, cascadeId?: string, message?: string} | null>(null);
+  const [canDelete, setCanDelete] = useState(false); // Restricción de borrado: solo el último global
+
+  // Constraints for editing
+  const [editConstraints, setEditConstraints] = useState<{min: string | null, max: string | null, minTime?: Date, maxTime?: Date} | null>(null);
+  const [latestGlobalId, setLatestGlobalId] = useState<string | null>(null); // ID of the absolute latest record
+  
+  // Custom Error Modal State
+  const [errorModalOpen, setErrorModalOpen] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  
+
+
+
   useEffect(() => {
     const fetchHistory = async () => {
       if (!user) return;
@@ -95,6 +111,21 @@ const HistoryScreen: React.FC = () => {
          setHistoryEntries([]);
       }
       setLoadingHistory(false);
+
+      // Fetch Global Latest ID (to handle "Delete" button visibility correctly across days)
+      const { data: latestData } = await supabase
+        .from('time_entries')
+        .select('id')
+        .eq('user_id', user.id)
+        .order('occurred_at', { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (latestData) {
+         setLatestGlobalId(latestData.id);
+      } else {
+         setLatestGlobalId(null);
+      }
     };
 
     fetchHistory();
@@ -104,15 +135,97 @@ const HistoryScreen: React.FC = () => {
   const handleRefresh = () => setRefreshKey(k => k + 1);
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm("¿Seguro que quieres eliminar este registro?")) return;
+    // 1. Obtener registro para comprobar cascada
+    const { data: entry, error: fetchErr } = await supabase
+      .from('time_entries')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !entry) {
+       console.error(fetchErr);
+       alert("No se pudo localizar el registro");
+       return;
+    }
+
+    const type = (entry.entry_type ?? "").toLowerCase();
     
-    const { error } = await supabase.from('time_entries').delete().eq('id', id);
+    // SAFETY CHECK: Ensure this is GLOBALLY the last record before deleting
+    // (If user clicks delete from the list, we must re-verify because list state might be stale or partial)
+    const { data: futureEntries } = await supabase
+         .from('time_entries')
+         .select('id')
+         .eq('user_id', user.id)
+         .gt('occurred_at', entry.occurred_at)
+         .limit(1);
+
+    
+
+
+    if (futureEntries && futureEntries.length > 0) {
+        alert("Solo se puede eliminar el último registro del historial completo.");
+        return;
+    }
+
+    // Identificar si es un evento de cierre que requiere borrar su apertura
+    // Identificar si es un evento de cierre que requiere borrar su apertura
+    // AHORA: clock-in también puede cerrar break-start/others-out
+    const potentialLinks = ['break-start', 'others-out'];
+    let cascadeId = undefined;
+    let linkMsg = null;
+
+    // Buscar SIEMPRE el registro anterior inmediato para ver si formamos un par
+    const { data: prevs } = await supabase
+         .from('time_entries')
+         .select('*')
+         .eq('user_id', user.id)
+         .lt('occurred_at', entry.occurred_at)
+         .order('occurred_at', { ascending: false })
+         .limit(1);
+
+    if (prevs && prevs.length > 0) {
+        const prev = prevs[0];
+        const prevType = prev.entry_type;
+        
+        // Si borramos un break-end, tiene que haber un break-start antes (lógica original)
+        if (type === 'break-end' && prevType === 'break-start') {
+             cascadeId = prev.id;
+             linkMsg = `Al eliminar este fin de descanso, se eliminará también el inicio correspondiente.`;
+        }
+        // Si borramos un others-in, tiene que haber un others-out antes
+        else if (type === 'others-in' && prevType === 'others-out') {
+             cascadeId = prev.id;
+             linkMsg = `Al eliminar esta vuelta de permiso, se eliminará también la salida correspondiente.`;
+        }
+        // NUEVO: Si borramos un clock-in (que se usa como cierre genérico ahora), y el anterior es break/others
+        else if (type === 'clock-in' && (prevType === 'break-start' || prevType === 'others-out')) {
+             cascadeId = prev.id;
+             linkMsg = `Al eliminar esta Entrada, se eliminará también el registro de ${prevType === 'break-start' ? 'Inicio Descanso' : 'Salida Permiso'} previo.`;
+        }
+    }
+
+    // Setear estado y abrir modal
+    setEntryToDelete({ id, cascadeId, message: linkMsg || undefined });
+    setDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!entryToDelete) return;
+
+    // Borrar principal
+    const { error } = await supabase.from('time_entries').delete().eq('id', entryToDelete.id);
     if (error) {
        console.error(error);
        alert("Error al eliminar");
     } else {
+       // Borrar cascada
+       if (entryToDelete.cascadeId) {
+          await supabase.from('time_entries').delete().eq('id', entryToDelete.cascadeId);
+       }
        handleRefresh();
     }
+    setDeleteModalOpen(false);
+    setEntryToDelete(null);
   };
 
   const openAddModal = () => {
@@ -126,7 +239,12 @@ const HistoryScreen: React.FC = () => {
     setShowModal(true);
   };
 
-  const openEditModal = (entry: any) => {
+
+
+  const openEditModal = async (entry: any) => {
+    // 1. Set initial state immediately to show modal fast (constraints will load in a moment if async needed? 
+    // Actually better to wait for constraints to avoid "jumping" validation or allowing edits before check.
+    // Let's set the entry first.
     setEditingEntry(entry);
     setEntryType(entry.entry_type);
     setContext(entry.description || ''); // Simple context mapping
@@ -135,8 +253,84 @@ const HistoryScreen: React.FC = () => {
     setFormDate(isoDate(d));
     setFormTime(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`);
     setFormTimeEnd('');
-    
+
+    // Reset constraints initially
+    setEditConstraints(null);
     setShowModal(true);
+
+    // Calcular restricciones de tiempo
+    // historyEntries está ordenado descendente (más nuevo primero)
+    // index-1 es el siguiente cronológicamente (futuro) -> MAX
+    // index+1 es el anterior cronológicamente (pasado) -> MIN
+    const idx = historyEntries.findIndex(e => e.id === entry.id);
+    let minT: Date | undefined = undefined;
+    let maxT: Date | undefined = undefined;
+    let minType: string | null = null;
+    let maxType: string | null = null;
+    let minStr: string | null = null;
+    let maxStr: string | null = null;
+
+    if (idx !== -1) {
+       // --- MIN CONSTRAINT (Previous in time) ---
+       if (idx < historyEntries.length - 1) {
+          // Local neighbor found
+          const prevEntry = historyEntries[idx + 1];
+          const prevD = prevEntry.occurred_at ? new Date(prevEntry.occurred_at) : new Date(prevEntry.created_at);
+          minT = prevD;
+          minType = prevEntry.entry_type;
+       } else {
+          // No local neighbor (First of the day). Check DB for last record BEFORE this one.
+           const { data: prevDb } = await supabase
+             .from('time_entries')
+             .select('*')
+             .eq('user_id', user.id)
+             .lt('occurred_at', entry.occurred_at) // Strictly before
+             .order('occurred_at', { ascending: false })
+             .limit(1)
+             .single();
+           
+           if (prevDb) {
+              minT = prevDb.occurred_at ? new Date(prevDb.occurred_at) : new Date(prevDb.created_at);
+              minType = prevDb.entry_type;
+           }
+       }
+
+       // --- MAX CONSTRAINT (Next in time) ---
+       if (idx > 0) {
+          // Local neighbor found
+          const nextEntry = historyEntries[idx - 1];
+          const nextD = nextEntry.occurred_at ? new Date(nextEntry.occurred_at) : new Date(nextEntry.created_at);
+          maxT = nextD;
+          maxType = nextEntry.entry_type;
+       } else {
+          // No local neighbor (Last of the day). Check DB for first record AFTER this one.
+          const { data: nextDb } = await supabase
+             .from('time_entries')
+             .select('*')
+             .eq('user_id', user.id)
+             .gt('occurred_at', entry.occurred_at) // Strictly after
+             .order('occurred_at', { ascending: true })
+             .limit(1)
+             .single();
+             
+           if (nextDb) {
+              maxT = nextDb.occurred_at ? new Date(nextDb.occurred_at) : new Date(nextDb.created_at);
+              maxType = nextDb.entry_type;
+           }
+       }
+    }
+
+    if (minT) minStr = `${pad2(minT.getHours())}:${pad2(minT.getMinutes())}`;
+    if (maxT) maxStr = `${pad2(maxT.getHours())}:${pad2(maxT.getMinutes())}`;
+
+    setEditConstraints({ 
+        min: minStr, 
+        max: maxStr, 
+        minTime: minT, 
+        maxTime: maxT,
+        minType,
+        maxType
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -157,17 +351,65 @@ const HistoryScreen: React.FC = () => {
 
     if (isIntervalBreak || isIntervalOthers) {
        // INTERVAL SAVE (2 records)
+       // ... (Lógica de añadir nuevo intervalo no cambia constraints de edición simple)
+       // ... (Lógica de añadir nuevo intervalo no cambia constraints de edición simple)
        if (!formTimeEnd) {
-          alert("Debes indicar hora de inicio y fin");
+          setErrorMessage("Debes indicar hora de inicio y fin");
+          setErrorModalOpen(true);
           return;
        }
        const startAt = makeDate(formDate, formTime);
        const endAt = makeDate(formDate, formTimeEnd);
 
        if (endAt <= startAt) {
-          alert("La hora de fin debe ser posterior al inicio");
+          setErrorMessage("La hora de fin debe ser posterior al inicio");
+          setErrorModalOpen(true);
           return;
        }
+
+       // --- INTERVAL CONSISTENCY CHECK ---
+       // 1. Validate Start: Must imply leaving a WORKING state.
+       // So PREVIOUS record to startAt must be 'working'.
+       const { data: prevToStart } = await supabase
+          .from('time_entries')
+          .select('*')
+          .eq('user_id', user.id)
+          .lt('occurred_at', startAt.toISOString())
+          .order('occurred_at', { ascending: false })
+          .limit(1)
+          .single();
+
+       const isWorkingState = (type: string) => 
+          ['clock-in', 'break-end', 'others-in'].includes(type);
+
+       // Rule: Can only Start Break/Permission if currently Working
+       if (!prevToStart || !isWorkingState(prevToStart.entry_type)) {
+           // Allow edge case? No, user wants strict.
+           // If no prev entry -> You are not working.
+           setErrorMessage("No puedes añadir un Descanso/Permiso si no consta que estés trabajando (falta una Entrada previa).");
+           setErrorModalOpen(true);
+           return;
+       }
+
+       // 2. Validate End: Must imply returning to WORKING state.
+       // So NEXT record after endAt must NOT be 'working' (avoid double entry).
+       const { data: nextToEnd } = await supabase
+          .from('time_entries')
+          .select('*')
+          .eq('user_id', user.id)
+          .gt('occurred_at', endAt.toISOString())
+          .order('occurred_at', { ascending: true })
+          .limit(1)
+          .single();
+
+       if (nextToEnd) {
+           if (isWorkingState(nextToEnd.entry_type)) {
+               setErrorMessage("No puedes finalizar el Descanso/Permiso porque el siguiente registro ya es una Entrada/Vuelta.");
+               setErrorModalOpen(true);
+               return;
+           }
+       }
+       // ----------------------------------
 
        const typeStart = isIntervalBreak ? 'break-start' : 'others-out';
        const typeEnd = isIntervalBreak ? 'break-end' : 'others-in';
@@ -181,7 +423,8 @@ const HistoryScreen: React.FC = () => {
           description: desc,
           occurred_at: startAt.toISOString(),
           date: formDate,
-          entry_time: formTime
+          entry_time: formTime,
+          minutes: 0
        });
        if (err1) error = err1;
        else {
@@ -192,7 +435,8 @@ const HistoryScreen: React.FC = () => {
             description: isIntervalOthers ? "Fin Permiso" : typeMeta(typeEnd).label, // Usually end has generic desc
             occurred_at: endAt.toISOString(),
             date: formDate,
-            entry_time: formTimeEnd
+            entry_time: formTimeEnd,
+            minutes: 0
          });
          error = err2;
        }
@@ -201,6 +445,89 @@ const HistoryScreen: React.FC = () => {
       // SINGLE SAVE (Insert or Update)
       const occurredAt = makeDate(formDate, formTime);
       
+      // VALIDAR Constraints si estamos editando
+      if (editingEntry && editConstraints) {
+         if (editConstraints.minTime && occurredAt < editConstraints.minTime) {
+            const minStrFull = editConstraints.minTime.toLocaleString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+            setErrorMessage(`La fecha/hora no puede ser anterior al registro previo (${minStrFull})`);
+            setErrorModalOpen(true);
+            return;
+         }
+         if (editConstraints.maxTime && occurredAt > editConstraints.maxTime) {
+            const maxStrFull = editConstraints.maxTime.toLocaleString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+            setErrorMessage(`La fecha/hora no puede ser posterior al registro siguiente (${maxStrFull})`);
+            setErrorModalOpen(true);
+            return;
+         }
+      }
+
+      
+      // LOGICAL CONSISTENCY CHECK (Only for new manual entries)
+      if (!editingEntry) {
+         // 1. Fetch Previous Entry
+         const { data: prevEntry } = await supabase
+            .from('time_entries')
+            .select('*')
+            .eq('user_id', user.id)
+            .lt('occurred_at', occurredAt.toISOString())
+            .order('occurred_at', { ascending: false })
+            .limit(1)
+            .single();
+
+         // 2. Fetch Next Entry
+         const { data: nextEntry } = await supabase
+            .from('time_entries')
+            .select('*')
+            .eq('user_id', user.id)
+            .gt('occurred_at', occurredAt.toISOString())
+            .order('occurred_at', { ascending: true })
+            .limit(1)
+            .single();
+
+         const isWorkingState = (type: string) => 
+            ['clock-in', 'break-end', 'others-in'].includes(type);
+
+         const newIsWorking = isWorkingState(entryType);
+
+         // Validate Previous
+         if (prevEntry) {
+            const prevWorking = isWorkingState(prevEntry.entry_type);
+            if (prevWorking === newIsWorking) {
+               setErrorMessage(newIsWorking 
+                  ? "No puedes registrar una Entrada si ya estás trabajando (registro anterior)." 
+                  : "No puedes registrar una Salida/Pausa si ya estás fuera/pausado (registro anterior).");
+               setErrorModalOpen(true);
+               return;
+            }
+         } else {
+             // Edge Case: No previous entry. 
+             // If trying to Clock-Out as first ever entry -> suspicious but maybe allowed?
+             // Let's stick to user request: "Prevent entry before entry".
+             // If I insert "Clock In" and no prev exists -> Valid.
+             // If I insert "Clock Out" and no prev exists -> Invalid?
+             if (!newIsWorking) {
+                 // Maybe allow for importing history, or block?
+                 // Let's be safe and warn.
+                 // setErrorMessage("No se encuentra un registro de entrada previo.");
+                 // setErrorModalOpen(true);
+                 // return;
+                 // (Commented out to be permissible for first records)
+             }
+         }
+
+         // Validate Next
+         if (nextEntry) {
+            const nextWorking = isWorkingState(nextEntry.entry_type);
+            if (nextWorking === newIsWorking) {
+                setErrorMessage(newIsWorking 
+                  ? "No puedes registrar una Entrada si el siguiente registro ya es una Entrada." 
+                  : "No puedes registrar una Salida/Pausa si el siguiente registro ya es Salida/Pausa.");
+               setErrorModalOpen(true);
+               return;
+            }
+         }
+      }
+
       const payload = {
         user_id: user.id,
         entry_type: entryType,
@@ -208,6 +535,7 @@ const HistoryScreen: React.FC = () => {
         occurred_at: occurredAt.toISOString(),
         date: formDate, // Legacy/Redundant
         entry_time: formTime, // Legacy
+        minutes: 0 
       };
 
       if (editingEntry) {
@@ -228,7 +556,8 @@ const HistoryScreen: React.FC = () => {
 
     if (error) {
       console.error(error);
-      alert("Error al guardar");
+      setErrorMessage("Error al guardar");
+      setErrorModalOpen(true);
     } else {
       setShowModal(false);
       setContext('');
@@ -382,19 +711,44 @@ const HistoryScreen: React.FC = () => {
     const radius = 30;
     const strokeWidth = 10;
 
+    // Caso especial: 100% de CUALQUIER concepto (Libre, Trabajando, etc.)
+    const fullItem = dailyDistribution.find(d => d.value >= 99); // Margen por redondeo
+
+    if (fullItem) {
+       return (
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="transform -rotate-90 drop-shadow-sm shrink-0">
+           <circle
+             cx={center}
+             cy={center}
+             r={radius}
+             fill="none"
+             stroke={fullItem.color}
+             strokeWidth={strokeWidth}
+           />
+        </svg>
+       );
+    }
+
     return (
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="transform -rotate-90 drop-shadow-sm shrink-0">
         {dailyDistribution.map((item, index) => {
           const startPercent = cumulativePercent;
           const endPercent = cumulativePercent + item.value;
           cumulativePercent = endPercent;
+
+          // Evitar dibujar segmentos vacíos
+          if (item.value <= 0) return null;
+
           const startAngle = (startPercent / 100) * 2 * Math.PI;
           const endAngle = (endPercent / 100) * 2 * Math.PI;
+          
           const x1 = center + radius * Math.cos(startAngle);
           const y1 = center + radius * Math.sin(startAngle);
           const x2 = center + radius * Math.cos(endAngle);
           const y2 = center + radius * Math.sin(endAngle);
+          
           const largeArcFlag = item.value > 50 ? 1 : 0;
+          
           const pathData = [`M ${x1} ${y1}`, `A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`].join(' ');
           return (
             <path
@@ -412,6 +766,8 @@ const HistoryScreen: React.FC = () => {
   };
 
   const [isEditingHistory, setIsEditingHistory] = useState(false);
+
+
 
   return (
     <div className="relative flex h-full min-h-screen w-full flex-col overflow-x-hidden max-w-md mx-auto shadow-xl bg-background-light dark:bg-background-dark pb-32">
@@ -496,27 +852,6 @@ const HistoryScreen: React.FC = () => {
             Detalle: {selectedDate.getDate()} {monthNames[selectedDate.getMonth()]}
           </h3>
           
-          <div className="bg-white dark:bg-surface-dark rounded-3xl p-5 shadow-sm border border-slate-100 dark:border-slate-800/50">
-            <h4 className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Distribución del Tiempo</h4>
-            <div className="flex items-center gap-6">
-              {renderMiniDonut()}
-              <div className="flex flex-col gap-2.5 flex-1">
-                {dailyDistribution.map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }}></div>
-                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</span>
-                    </div>
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-xs font-bold text-slate-900 dark:text-slate-100">{item.hours}</span>
-                      <span className="text-[9px] font-light text-slate-400 dark:text-slate-500">{item.value}%</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-          
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
               <h4 className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Registros de Actividad</h4>
@@ -550,7 +885,9 @@ const HistoryScreen: React.FC = () => {
                   type === "clock-in" ||
                   type === "break-start" ||
                   type === "clock-out" ||
-                  type === "others-out"
+                  type === "others-out" ||
+                  type === "break-end" ||
+                  type === "others-in"
                 ) {
                   const msCurrent = occurred.getTime();
                   const parsedNext = idx > 0 ? historyEntries[idx - 1] : null;
@@ -579,15 +916,30 @@ const HistoryScreen: React.FC = () => {
                   }
                 }
 
-                // Ocultar break-end y others-in
-                if (type === 'break-end' || type === 'others-in') return null;
+                // FILTRADO DE INTERVALOS ABIERTOS (User Request: "si no tengo retorno no se muestre")
+                if (type === 'break-start') {
+                    // Solo mostramos 'Inicio descanso' si el registro INMEDIATAMENTE ANTERIOR (más nuevo) es 'break-end' O 'clock-in'
+                    const nextEntry = idx > 0 ? historyEntries[idx - 1] : null;
+                    const nextType = (nextEntry?.entry_type ?? "").toLowerCase();
+                    if (nextType !== 'break-end' && nextType !== 'clock-in') return null;
+                }
+
+                if (type === 'others-out') {
+                    // Igual para permisos
+                    const nextEntry = idx > 0 ? historyEntries[idx - 1] : null;
+                    const nextType = (nextEntry?.entry_type ?? "").toLowerCase();
+                    if (nextType !== 'others-in' && nextType !== 'clock-in') return null; 
+                }
+
+                // Se muestran todos los eventos (incluyendo break-end y others-in)
+                // if (type === 'break-end' || type === 'others-in') return null;
 
                 const stateTitles: Record<string, string> = {
                   "clock-in": "Trabajando",
                   "clock-out": "Salida",
                   "break-start": "Descanso",
-                  "break-end": "Entrada",
-                  "others-in": "Fin Permiso",
+                  "break-end": "Trabajando",
+                  "others-in": "Trabajando",
                 };
 
                 const isStandard = Object.keys(stateTitles).includes(type);
@@ -598,7 +950,11 @@ const HistoryScreen: React.FC = () => {
                 }
 
                 return (
-                  <div key={e.id} className={`flex items-center gap-4 p-3 rounded-xl border-l-4 ${c.border} bg-white dark:bg-surface-dark shadow-sm group animate-in fade-in transition-all delay-[${idx * 50}ms]`}>
+                  <div 
+                    key={e.id} 
+                    className={`flex items-center gap-4 p-3 rounded-xl border-l-4 ${c.border} bg-white dark:bg-surface-dark shadow-sm group animate-fadeInUp`}
+                    style={{ animationDelay: `${idx * 0.05}s`, animationFillMode: 'both' }}
+                  >
                     <div className={`size-10 rounded-full ${c.iconBg} flex items-center justify-center shrink-0`}>
                       <span className={`material-symbols-outlined text-xl ${c.iconText}`}>{meta.icon}</span>
                     </div>
@@ -614,7 +970,7 @@ const HistoryScreen: React.FC = () => {
                        )}
                       
                       <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isEditingHistory ? 'w-8 opacity-100 ml-1' : 'w-0 opacity-0 ml-0'}`}>
-                        {idx === 0 ? (
+                        {e.id === latestGlobalId ? (
                           <button 
                             onClick={() => handleDelete(e.id)}
                             className="size-8 rounded-lg bg-slate-50 dark:bg-white/5 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all cursor-pointer border-none shrink-0" 
@@ -637,6 +993,27 @@ const HistoryScreen: React.FC = () => {
                 );
               })
             )}
+          </div>
+
+          <div className="bg-white dark:bg-surface-dark rounded-3xl p-5 shadow-sm border border-slate-100 dark:border-slate-800/50">
+            <h4 className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Distribución del Tiempo</h4>
+            <div className="flex items-center gap-6">
+              {renderMiniDonut()}
+              <div className="flex flex-col gap-2.5 flex-1">
+                {dailyDistribution.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }}></div>
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</span>
+                    </div>
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-xs font-bold text-slate-900 dark:text-slate-100">{item.hours}</span>
+                      <span className="text-[9px] font-light text-slate-400 dark:text-slate-500">{item.value}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -670,6 +1047,77 @@ const HistoryScreen: React.FC = () => {
         </div>
       </nav>
 
+      {/* Modal Borrado UI */}
+      {deleteModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 visible opacity-100">
+          <div onClick={() => setDeleteModalOpen(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"></div>
+          <div className="relative bg-white dark:bg-[#1C1C1E] rounded-t-2xl sm:rounded-3xl p-6 w-full max-w-sm shadow-2xl animate-in slide-in-from-bottom duration-300 border border-slate-100 dark:border-slate-800">
+            <div className="flex flex-col items-center text-center gap-4">
+              <div className="size-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center text-red-600 dark:text-red-500">
+                <span className="material-symbols-outlined text-2xl">delete</span>
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">¿Eliminar registro?</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                   Esta acción no se puede deshacer.
+                   {entryToDelete?.message && (
+                     <span className="block mt-2 font-medium text-amber-600 dark:text-amber-500 text-xs bg-amber-50 dark:bg-amber-900/20 p-2 rounded-lg">
+                       {entryToDelete.message}
+                     </span>
+                   )}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 w-full mt-2">
+                <button
+                  onClick={() => setDeleteModalOpen(false)}
+                  className="py-3 px-4 rounded-xl font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors border-none cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="py-3 px-4 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 shadow-lg shadow-red-500/30 transition-all active:scale-95 border-none cursor-pointer"
+                >
+                  Eliminar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Error UI (Validation) */}
+      {errorModalOpen && (
+        <div className="fixed inset-0 z-[80] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 visible opacity-100">
+           <div onClick={() => setErrorModalOpen(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"></div>
+          <div className="relative bg-white dark:bg-[#1C1C1E] rounded-t-2xl sm:rounded-3xl p-6 w-full max-w-sm shadow-2xl animate-in slide-in-from-bottom duration-300 border border-slate-100 dark:border-slate-800">
+            <div className="flex flex-col items-center text-center gap-4">
+              <div className="size-14 rounded-full bg-amber-50 dark:bg-amber-500/10 flex items-center justify-center text-amber-500 mb-2">
+                <span className="material-symbols-outlined text-[28px]">warning</span>
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Atención</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 pb-2">
+                   {errorMessage}
+                </p>
+              </div>
+
+              <div className="w-full mt-2">
+                <button
+                  onClick={() => setErrorModalOpen(false)}
+                  className="w-full py-3.5 px-4 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-xl shadow-blue-500/20 transition-all active:scale-95 border-none cursor-pointer"
+                >
+                  Entendido
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Manual Entry Modal */}
       <div className={`fixed inset-0 z-[60] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 ${showModal ? 'visible opacity-100' : 'invisible opacity-0'}`}>
         <div onClick={() => { setShowModal(false); setContext(''); }} className="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
@@ -683,91 +1131,181 @@ const HistoryScreen: React.FC = () => {
             </button>
           </div>
           <form className="p-5 space-y-4 no-scrollbar max-h-[85vh] overflow-y-auto" onSubmit={handleSave}>
+            
+            {/* TIMELINE VISUAL GUIDE */}
+            {editingEntry && editConstraints && (editConstraints.minTime || editConstraints.maxTime) && (
+               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 border border-slate-100 dark:border-slate-800 mb-2">
+                  <div className="flex items-center gap-2 mb-2">
+                      <span className="material-symbols-outlined text-[16px] text-slate-400">info</span>
+                      <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Rango de tiempo permitido</span>
+                  </div>
+                  
+                  {(() => {
+                      // Determine theme color based on entry type
+                      let themeClass = 'bg-primary border-primary text-primary';
+                      let themeRing = 'ring-primary/20';
+                      // type casting for check
+                      const t = entryType as any;
+                      if (t === 'break-start' || t === 'break-end' || t === 'break-interval') {
+                          themeClass = 'bg-amber-500 border-amber-500 text-amber-500';
+                          themeRing = 'ring-amber-500/20';
+                      } else if (t === 'others-in' || t === 'others-out' || t === 'others-interval') {
+                          themeClass = 'bg-pink-500 border-pink-500 text-pink-500';
+                          themeRing = 'ring-pink-500/20';
+                      } else if (t === 'clock-out') {
+                          themeClass = 'bg-slate-600 border-slate-600 text-slate-600';
+                          themeRing = 'ring-slate-600/20';
+                      }
+
+                      const getIcon = (type: string | null) => {
+                          if (!type) return 'schedule';
+                          if (type.includes('break')) return 'coffee';
+                          if (type.includes('others')) return 'edit_note';
+                          if (type === 'clock-out') return 'logout';
+                          return 'login';
+                      };
+                      
+                      const getThemeColors = (type: string | null) => {
+                           // Returns [Text Color, Border Color] full classes
+                           if (!type) return ['text-slate-400', 'border-slate-300 dark:border-slate-700'];
+                           if (type.includes('break')) return ['text-amber-500', 'border-amber-500'];
+                           if (type.includes('others')) return ['text-pink-500', 'border-pink-500'];
+                           if (type === 'clock-out') return ['text-slate-500', 'border-slate-500'];
+                           return ['text-primary', 'border-primary'];
+                      }
+
+                      return (
+
+                        <div className="flex flex-col gap-2">
+                             {/* ROW 1: ICONS & LINE */}
+                             <div className="relative flex items-center justify-between px-2 py-2">
+                                {/* Line connector - Authentically centered */}
+                                <div className={`absolute left-6 right-6 top-1/2 -translate-y-1/2 h-0.5 z-0 rounded-full opacity-30 ${themeClass.replace('text-', 'bg-').split(' ')[0]}`}></div>
+                                
+                                {/* Min Node (Left) */}
+                                <div className="relative z-10 flex flex-col items-center">
+                                    {(() => {
+                                    const [txt, brd] = getThemeColors(editConstraints.minType);
+                                    return (
+                                        <div className={`size-8 rounded-full border-2 bg-white dark:bg-[#1C1C1E] flex items-center justify-center shadow-sm ${editConstraints.minTime ? brd : 'border-slate-100 dark:border-slate-800 opacity-50'}`}>
+                                            <span className={`material-symbols-outlined text-[16px] ${txt}`}>
+                                                {getIcon(editConstraints.minType)}
+                                            </span>
+                                        </div>
+                                    );
+                                    })()}
+                                </div>
+
+                                {/* Current Indicator (Center) */}
+                                <div className={`relative z-10 flex flex-col items-center justify-center size-10 rounded-full text-white shadow-md ${themeClass.split(' ')[0]} ring-4 ${themeRing} ring-offset-2 ring-offset-white dark:ring-offset-[#1C1C1E] transition-all transform hover:scale-105`}>
+                                    <span className="material-symbols-outlined text-[20px]">
+                                        {getIcon(t)}
+                                    </span>
+                                </div>
+
+                                {/* Max Node (Right) */}
+                                <div className="relative z-10 flex flex-col items-center">
+                                    {(() => {
+                                    const [txt, brd] = getThemeColors(editConstraints.maxType);
+                                    return (
+                                        <div className={`size-8 rounded-full border-2 bg-white dark:bg-[#1C1C1E] flex items-center justify-center shadow-sm ${editConstraints.maxTime ? brd : 'border-slate-100 dark:border-slate-800 opacity-50'}`}>
+                                            <span className={`material-symbols-outlined text-[16px] ${txt}`}>
+                                                {getIcon(editConstraints.maxType)}
+                                            </span>
+                                        </div>
+                                    );
+                                    })()}
+                                </div>
+                             </div>
+
+                             {/* ROW 2: DATES */}
+                             <div className="flex items-center justify-between px-1">
+                                <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/80 px-2 py-1 rounded-md">
+                                   {editConstraints.minTime 
+                                      ? editConstraints.minTime.toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute:'2-digit' })
+                                      : 'Inicio'}
+                                </span>
+                                <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/80 px-2 py-1 rounded-md">
+                                   {editConstraints.maxTime 
+                                      ? editConstraints.maxTime.toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute:'2-digit' }) 
+                                      : 'Fin'}
+                                </span>
+                             </div>
+                        </div>
+                      );
+                  })()}
+               </div>
+            )}
+
             <div className="space-y-3">
-              <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tipo de Registro</label>
-              <div className="grid grid-cols-2 gap-3">
-                {/* ENTRADA */}
-                <button 
-                  type="button" 
-                  onClick={() => setEntryType('clock-in')} 
-                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
-                    entryType === 'clock-in' 
-                      ? 'bg-primary text-white border-primary shadow-md opacity-100 ring-2 ring-primary/20' 
-                      : 'bg-primary text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
-                  }`}
-                >
-                  <span className="material-symbols-outlined text-[18px]">login</span> Entrada
-                </button>
-
-                {/* SALIDA */}
-                <button 
-                  type="button" 
-                  onClick={() => setEntryType('clock-out')} 
-                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
-                    entryType === 'clock-out' 
-                      ? 'bg-slate-600 text-white border-slate-600 shadow-md opacity-100 ring-2 ring-slate-600/20' 
-                      : 'bg-slate-600 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
-                  }`}
-                >
-                  <span className="material-symbols-outlined text-[18px]">logout</span> Salida
-                </button>
-
-                {/* DESCANSO (Toggle if editing, Interval if adding) */}
-                <button 
-                  type="button" 
-                  onClick={() => {
-                    if (editingEntry) {
-                       if (entryType === 'break-start') setEntryType('break-end');
-                       else setEntryType('break-start');
-                    } else {
-                       // ADD MODE: Just set interval type
-                       setEntryType('break-interval' as any);
-                    }
-                  }} 
-                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
-                    (entryType === 'break-start' || entryType === 'break-end' || (entryType as any) === 'break-interval')
-                      ? 'bg-amber-500 text-white border-amber-500 shadow-md opacity-100 ring-2 ring-amber-500/20' 
-                      : 'bg-amber-500 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
-                  }`}
-                >
-                  <span className="material-symbols-outlined text-[18px]">
-                    {entryType === 'break-end' ? 'play_arrow' : 'coffee'}
-                  </span> 
-                  {/* Label logic: If editing, show specific. If adding, show generic "Descanso" */}
-                  {editingEntry 
-                    ? (entryType === 'break-end' ? 'Fin Descanso' : 'Inicio Descanso')
-                    : 'Descanso'
-                  }
-                </button>
-
-                {/* PERMISO (Toggle if editing, Interval if adding) */}
-                <button 
-                  type="button" 
-                  onClick={() => {
-                     if (editingEntry) {
-                        if (entryType === 'others-out') setEntryType('others-in');
-                        else setEntryType('others-out');
-                     } else {
-                        // ADD MODE: Just set interval type
-                        setEntryType('others-interval' as any);
-                     }
-                  }} 
-                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
-                    (entryType === 'others-out' || entryType === 'others-in' || (entryType as any) === 'others-interval')
-                      ? 'bg-pink-500 text-white border-pink-500 shadow-md opacity-100 ring-2 ring-pink-500/20' 
-                      : 'bg-pink-500 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
-                  }`}
-                >
-                  <span className="material-symbols-outlined text-[18px]">
-                    {(entryType === 'others-in' || (entryType as any) === 'others-interval') ? 'history_edu' : 'edit_note'}
-                  </span>
-                  {editingEntry 
-                    ? (entryType === 'others-in' ? 'Fin Permiso' : 'Permiso')
-                    : 'Permiso'
-                  }
-                </button>
-              </div>
+              {!editingEntry && (
+                 <>
+                   <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tipo de Registro</label>
+                   <div className="grid grid-cols-2 gap-3">
+                     {/* ENTRADA */}
+                     <button 
+                       type="button" 
+                       onClick={() => setEntryType('clock-in')} 
+                       className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
+                         entryType === 'clock-in' 
+                           ? 'bg-primary text-white border-primary shadow-md opacity-100 ring-2 ring-primary/20' 
+                           : 'bg-primary text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
+                       }`}
+                     >
+                       <span className="material-symbols-outlined text-[18px]">login</span> Entrada
+                     </button>
+     
+                     {/* SALIDA */}
+                     <button 
+                       type="button" 
+                       onClick={() => setEntryType('clock-out')} 
+                       className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
+                         entryType === 'clock-out' 
+                           ? 'bg-slate-600 text-white border-slate-600 shadow-md opacity-100 ring-2 ring-slate-600/20' 
+                           : 'bg-slate-600 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
+                       }`}
+                     >
+                       <span className="material-symbols-outlined text-[18px]">logout</span> Salida
+                     </button>
+     
+                     {/* DESCANSO (Toggle if editing, Interval if adding) */}
+                     <button 
+                       type="button" 
+                       onClick={() => {
+                           // ADD MODE: Just set interval type
+                           setEntryType('break-interval' as any);
+                       }} 
+                       className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
+                         ((entryType as any) === 'break-interval')
+                           ? 'bg-amber-500 text-white border-amber-500 shadow-md opacity-100 ring-2 ring-amber-500/20' 
+                           : 'bg-amber-500 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
+                       }`}
+                     >
+                       <span className="material-symbols-outlined text-[18px]">coffee</span> 
+                       Descanso
+                     </button>
+     
+                     {/* PERMISO (Toggle if editing, Interval if adding) */}
+                     <button 
+                       type="button" 
+                       onClick={() => {
+                             // ADD MODE: Just set interval type
+                             setEntryType('others-interval' as any);
+                       }} 
+                       className={`flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-bold transition-all border ${
+                         ((entryType as any) === 'others-interval')
+                           ? 'bg-pink-500 text-white border-pink-500 shadow-md opacity-100 ring-2 ring-pink-500/20' 
+                           : 'bg-pink-500 text-white/70 border-gray-200 dark:border-gray-700 opacity-40 hover:opacity-70'
+                       }`}
+                     >
+                       <span className="material-symbols-outlined text-[18px]">edit_note</span>
+                       Permiso
+                     </button>
+                   </div>
+                 </>
+              )}
             </div>
+
 
             {/* Context for others */}
             {((entryType === 'others-in' || entryType === 'others-out' || (entryType as any) === 'others-interval')) && (
@@ -792,6 +1330,8 @@ const HistoryScreen: React.FC = () => {
                 value={formDate}
                 onChange={(e) => setFormDate(e.target.value)}
               />
+              
+
             </div>
             
             {/* Conditional Time Inputs: Single vs Range */}
@@ -825,10 +1365,25 @@ const HistoryScreen: React.FC = () => {
                   value={formTime}
                   onChange={(e) => setFormTime(e.target.value)}
                 />
+                
+
               </div>
             )}
             
             <div className="flex items-center gap-3 pt-2">
+              {canDelete && editingEntry && (
+                 <button 
+                   onClick={() => {
+                      setEntryToDelete({ id: editingEntry.id });
+                      setDeleteModalOpen(true);
+                   }} 
+                   className="size-11 rounded-xl flex items-center justify-center text-red-500 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors border-none cursor-pointer" 
+                   type="button"
+                   title="Eliminar registro"
+                 >
+                    <span className="material-symbols-outlined text-[20px]">delete</span>
+                 </button>
+              )}
               <button onClick={() => { setShowModal(false); setContext(''); setEditingEntry(null); }} className="flex-1 py-3 px-4 rounded-xl text-center text-sm font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors border-none bg-transparent cursor-pointer" type="button">Cancelar</button>
               <button className={`flex-1 py-3 px-4 rounded-xl text-white text-sm font-bold shadow-lg transition-all hover:opacity-90 border-none cursor-pointer ${
                 (entryType === 'clock-out') ? 'bg-slate-600 shadow-slate-600/25' :

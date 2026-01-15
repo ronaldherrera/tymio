@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
+import { Logo } from "./Logo";
 
 
 const SigninScreen: React.FC = () => {
@@ -15,7 +16,7 @@ const SigninScreen: React.FC = () => {
 
   const canSubmit = useMemo(() => {
     const okEmail = email.trim().length > 3;
-    const okPass = password.length >= 6;
+    const okPass = password.length >= 8 && /\d/.test(password) && /[A-Z]/.test(password);
     const okConfirm = password === confirm;
     return okEmail && okPass && okConfirm && !loading;
   }, [email, password, confirm, loading]);
@@ -54,13 +55,15 @@ const SigninScreen: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-background-light dark:bg-background-dark">
       <div className="w-full max-w-[480px]">
         <div className="flex flex-col items-center justify-center py-8">
-          <div className="h-20 w-20 bg-gradient-to-br from-primary to-blue-600 rounded-2xl shadow-glow flex items-center justify-center mb-6 text-white">
-            <span className="material-symbols-outlined text-[40px]">person_add</span>
+          <div className="flex items-center gap-4 mb-8 transform hover:scale-105 transition-transform duration-300">
+             <Logo className="h-12 w-12 drop-shadow-xl" />
+             <span className="text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-none">Tymio</span>
           </div>
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-center text-slate-900 dark:text-white">
+
+          <h1 className="text-2xl font-bold tracking-tight text-center text-slate-900 dark:text-white/90">
             Crear cuenta
           </h1>
-          <p className="text-slate-500 dark:text-[#92a4c9] mt-3 text-center text-base font-medium">
+          <p className="text-slate-500 dark:text-[#92a4c9] mt-2 text-center text-sm font-medium">
             Empieza a controlar tu tiempo
           </p>
         </div>
@@ -78,7 +81,7 @@ const SigninScreen: React.FC = () => {
               </div>
               <input
                 className="block w-full h-14 pl-12 pr-4 rounded-xl border-0 bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] focus:ring-2 focus:ring-inset focus:ring-primary sm:text-base text-slate-900 dark:text-white outline-none"
-                placeholder="nombre@empresa.com"
+                placeholder="usuario@email.com"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -118,6 +121,25 @@ const SigninScreen: React.FC = () => {
                 </span>
               </button>
             </div>
+            
+            {/* Password Requirements */}
+            <div className="flex flex-wrap items-center gap-3 pt-1 pl-1">
+               {(() => {
+                  const reqs = [
+                    { label: "Mín. 8 caracteres", valid: password.length >= 8 },
+                    { label: "Un número", valid: /\d/.test(password) },
+                    { label: "Una mayúscula", valid: /[A-Z]/.test(password) },
+                  ];
+                  return reqs.map((req, idx) => (
+                    <div key={idx} className={`flex items-center gap-1 text-xs font-medium transition-colors ${req.valid ? 'text-emerald-500' : 'text-slate-400'}`}>
+                       <span className="material-symbols-outlined text-[14px]">
+                          {req.valid ? 'check_circle' : 'radio_button_unchecked'}
+                       </span>
+                       {req.label}
+                    </div>
+                  ));
+               })()}
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -140,7 +162,10 @@ const SigninScreen: React.FC = () => {
               />
             </div>
             {confirm.length > 0 && confirm !== password && (
-              <p className="text-sm text-red-300 font-semibold">Las contraseñas no coinciden</p>
+              <div className="flex items-center gap-1 text-red-500 pl-1 animate-in fade-in slide-in-from-top-1">
+                  <span className="material-symbols-outlined text-[16px]">error</span>
+                  <span className="text-xs font-bold">Las contraseñas no coinciden</span>
+              </div>
             )}
           </div>
 
