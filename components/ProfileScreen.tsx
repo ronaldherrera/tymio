@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { AppContext } from '../App';
 import { supabase } from '../services/supabase';
 import { DEFAULT_AVATAR } from '../constants';
+import { Logo } from './Logo';
 
 const startOfYear = (d: Date) => {
   const date = new Date(d.getFullYear(), 0, 1);
@@ -45,6 +46,16 @@ const ProfileScreen: React.FC = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
+
+  // Animation State
+  const [isExiting, setIsExiting] = useState(false);
+
+  const handleBack = () => {
+    setIsExiting(true);
+    setTimeout(() => {
+      navigate('/dashboard');
+    }, 300); // Match animation duration (0.3s)
+  };
 
   const handleExport = async () => {
     try {
@@ -343,14 +354,14 @@ const ProfileScreen: React.FC = () => {
 
 
   return (
-    <div className="relative flex h-full min-h-screen w-full flex-col overflow-x-hidden max-w-md mx-auto shadow-2xl bg-background-light dark:bg-background-dark pb-32">
+    <div className={`${isExiting ? 'animate-slideOutRight' : 'animate-slideInRight'} relative flex h-full min-h-screen w-full flex-col overflow-x-hidden max-w-md mx-auto shadow-2xl bg-background-light dark:bg-background-dark pb-32`}>
       <div className="sticky top-0 z-50 flex items-center bg-background-light dark:bg-background-dark p-4 pb-2 justify-between border-b dark:border-border-dark/30 border-gray-200">
-        <div onClick={() => navigate('/dashboard')} className="flex size-12 shrink-0 items-center justify-start text-slate-900 dark:text-white cursor-pointer hover:opacity-70 transition-opacity">
+        <div onClick={handleBack} className="flex size-12 shrink-0 items-center justify-start text-slate-900 dark:text-white cursor-pointer hover:opacity-70 transition-opacity">
           <span className="material-symbols-outlined text-[24px]">arrow_back_ios_new</span>
         </div>
         <h2 className="text-slate-900 dark:text-white text-lg font-bold leading-tight tracking-[-0.015em] flex-1 text-center">Mi Perfil</h2>
         <div className="flex w-12 items-center justify-end">
-          <button className="text-primary text-base font-bold leading-normal tracking-[0.015em] shrink-0 hover:opacity-80 transition-opacity">Editar</button>
+           <Logo className="h-10 w-10 drop-shadow-sm" />
         </div>
       </div>
 
@@ -471,109 +482,9 @@ const ProfileScreen: React.FC = () => {
         </div>
 
 
-        <div className="mt-6">
-          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Empresa</h3>
-          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
-            <button 
-              onClick={() => setMessage({ type: 'info', text: 'Esta opción aún no está disponible' })}
-              className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <div className="size-8 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-500">
-                  <span className="material-symbols-outlined text-[20px]">business</span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-slate-900 dark:text-white font-medium text-base">Vincular Empresa</span>
-                  <span className="text-xs text-text-secondary">Conectar con un espacio de trabajo</span>
-                </div>
-              </div>
-              <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
-            </button>
-          </div>
-        </div>
 
-        <div className="mt-6">
-          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Resumen Anual</h3>
-          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
-             <div className="p-5 flex items-center justify-between border-b border-gray-100 dark:border-border-dark/50">
-             {loadingStats ? (
-                <div className="w-full flex justify-center py-4">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                </div>
-             ) : (
-                <>
-                   {renderDonut()}
-                   <div className="flex flex-col gap-2.5 flex-1 w-full ml-4">
-                      {/* WORKING */}
-                      <div className="flex items-center justify-between w-full">
-                         <div className="flex items-center gap-2">
-                             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS.working }}></span>
-                             <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Trabajando</span>
-                         </div>
-                         <div className="flex flex-col items-end">
-                             <span className="text-sm font-bold text-slate-900 dark:text-white">{minutesToLabel(yearStats.w)}</span>
-                             <span className="text-[10px] text-slate-400 font-medium">
-                                {yearStats.w + yearStats.b + yearStats.o > 0 
-                                  ? Math.round((yearStats.w / (yearStats.w + yearStats.b + yearStats.o)) * 100) 
-                                  : 0}%
-                             </span>
-                         </div>
-                      </div>
-                      
-                      {/* BREAK */}
-                      <div className="flex items-center justify-between w-full">
-                         <div className="flex items-center gap-2">
-                             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS.break }}></span>
-                             <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Descanso</span>
-                         </div>
-                         <div className="flex flex-col items-end">
-                             <span className="text-sm font-bold text-slate-900 dark:text-white">{minutesToLabel(yearStats.b)}</span>
-                             <span className="text-[10px] text-slate-400 font-medium">
-                                {yearStats.w + yearStats.b + yearStats.o > 0 
-                                  ? Math.round((yearStats.b / (yearStats.w + yearStats.b + yearStats.o)) * 100) 
-                                  : 0}%
-                             </span>
-                         </div>
-                      </div>
 
-                      {/* OTHERS */}
-                      <div className="flex items-center justify-between w-full">
-                         <div className="flex items-center gap-2">
-                             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS.others }}></span>
-                             <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Permiso</span>
-                         </div>
-                         <div className="flex flex-col items-end">
-                             <span className="text-sm font-bold text-slate-900 dark:text-white">{minutesToLabel(yearStats.o)}</span>
-                             <span className="text-[10px] text-slate-400 font-medium">
-                                {yearStats.w + yearStats.b + yearStats.o > 0 
-                                  ? Math.round((yearStats.o / (yearStats.w + yearStats.b + yearStats.o)) * 100) 
-                                  : 0}%
-                             </span>
-                         </div>
-                      </div>
-                   </div>
-                </>
-             )}
-             </div>
-             
-             {/* Export Button */}
-             <button 
-                onClick={() => setShowExportModal(true)}
-                className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
-             >
-                <div className="flex items-center gap-3">
-                   <div className="size-8 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500">
-                      <span className="material-symbols-outlined text-[20px]">download</span>
-                   </div>
-                   <div className="flex flex-col">
-                      <span className="text-slate-900 dark:text-white font-medium text-base">Exportar Datos</span>
-                      <span className="text-xs text-text-secondary">Descargar informe en Excel (CSV)</span>
-                   </div>
-                </div>
-                <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
-             </button>
-          </div>
-        </div>
+
 
       {/* Export Modal (Drawer) */}
       <div className={`fixed inset-0 z-[80] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 ${showExportModal ? 'visible opacity-100' : 'invisible opacity-0'}`}>
@@ -720,21 +631,111 @@ const ProfileScreen: React.FC = () => {
               <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
             </button>
 
-            <div className="flex items-center justify-between px-4 py-4">
+
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Resumen Anual</h3>
+          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
+             <div className="p-5 flex items-center justify-between border-b border-gray-100 dark:border-border-dark/50">
+             {loadingStats ? (
+                <div className="w-full flex justify-center py-4">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                </div>
+             ) : (
+                <>
+                   {renderDonut()}
+                   <div className="flex flex-col gap-2.5 flex-1 w-full ml-4">
+                      {/* WORKING */}
+                      <div className="flex items-center justify-between w-full">
+                         <div className="flex items-center gap-2">
+                             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS.working }}></span>
+                             <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Trabajando</span>
+                         </div>
+                         <div className="flex flex-col items-end">
+                             <span className="text-sm font-bold text-slate-900 dark:text-white">{minutesToLabel(yearStats.w)}</span>
+                             <span className="text-[10px] text-slate-400 font-medium">
+                                {yearStats.w + yearStats.b + yearStats.o > 0 
+                                  ? Math.round((yearStats.w / (yearStats.w + yearStats.b + yearStats.o)) * 100) 
+                                  : 0}%
+                             </span>
+                         </div>
+                      </div>
+                      
+                      {/* BREAK */}
+                      <div className="flex items-center justify-between w-full">
+                         <div className="flex items-center gap-2">
+                             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS.break }}></span>
+                             <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Descanso</span>
+                         </div>
+                         <div className="flex flex-col items-end">
+                             <span className="text-sm font-bold text-slate-900 dark:text-white">{minutesToLabel(yearStats.b)}</span>
+                             <span className="text-[10px] text-slate-400 font-medium">
+                                {yearStats.w + yearStats.b + yearStats.o > 0 
+                                  ? Math.round((yearStats.b / (yearStats.w + yearStats.b + yearStats.o)) * 100) 
+                                  : 0}%
+                             </span>
+                         </div>
+                      </div>
+
+                      {/* OTHERS */}
+                      <div className="flex items-center justify-between w-full">
+                         <div className="flex items-center gap-2">
+                             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS.others }}></span>
+                             <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Permiso</span>
+                         </div>
+                         <div className="flex flex-col items-end">
+                             <span className="text-sm font-bold text-slate-900 dark:text-white">{minutesToLabel(yearStats.o)}</span>
+                             <span className="text-[10px] text-slate-400 font-medium">
+                                {yearStats.w + yearStats.b + yearStats.o > 0 
+                                  ? Math.round((yearStats.o / (yearStats.w + yearStats.b + yearStats.o)) * 100) 
+                                  : 0}%
+                             </span>
+                         </div>
+                      </div>
+                   </div>
+                </>
+             )}
+             </div>
+             
+             {/* Export Button */}
+             <button 
+                onClick={() => setShowExportModal(true)}
+                className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
+             >
+                <div className="flex items-center gap-3">
+                   <div className="size-8 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+                      <span className="material-symbols-outlined text-[20px]">download</span>
+                   </div>
+                   <div className="flex flex-col">
+                      <span className="text-slate-900 dark:text-white font-medium text-base">Exportar Datos</span>
+                      <span className="text-xs text-text-secondary">Descargar informe en Excel (CSV)</span>
+                   </div>
+                </div>
+                <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+             </button>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Empresa</h3>
+          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
+            <button 
+              onClick={() => setMessage({ type: 'info', text: 'Esta opción aún no está disponible' })}
+              className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
+            >
               <div className="flex items-center gap-3">
-                <div className="size-8 rounded-full bg-green-500/10 flex items-center justify-center text-green-500">
-                  <span className="material-symbols-outlined text-[20px]">face</span>
+                <div className="size-8 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-500">
+                  <span className="material-symbols-outlined text-[20px]">business</span>
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-slate-900 dark:text-white font-medium text-base">Face ID</span>
-                  <span className="text-xs text-text-secondary">Usar biométricos</span>
+                  <span className="text-slate-900 dark:text-white font-medium text-base">Vincular Empresa</span>
+                  <span className="text-xs text-text-secondary">Conectar con un espacio de trabajo</span>
                 </div>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input defaultChecked className="sr-only peer" type="checkbox" />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
-              </label>
-            </div>
+              <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+            </button>
           </div>
         </div>
 
@@ -767,33 +768,7 @@ const ProfileScreen: React.FC = () => {
       </div>
 
       {/* Consistent Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-[#151b26] border-t border-slate-200 dark:border-slate-800 pb-safe shadow-[0_-4px_10px_rgba(0,0,0,0.05)] z-30">
-        <div className="relative flex justify-around items-center h-16 max-w-md mx-auto">
-          {/* Left: Home */}
-          <button onClick={() => navigate('/dashboard')} className="flex flex-col items-center justify-center w-full h-full gap-1 text-slate-400 dark:text-slate-500 hover:text-primary transition-colors border-none bg-transparent cursor-pointer">
-            <span className="material-symbols-outlined text-[26px]">home</span>
-            <span className="text-[10px] font-medium">Inicio</span>
-          </button>
-          
-          {/* Center: Add (Floating/Protruding Circle) */}
-          <div className="absolute -top-7 left-1/2 -translate-x-1/2">
-            <button 
-              onClick={() => setShowModal(true)} 
-              className="size-16 rounded-full bg-primary text-white shadow-xl shadow-primary/30 flex items-center justify-center border-4 border-background-light dark:border-background-dark active:scale-90 transition-transform cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-4xl">add</span>
-            </button>
-          </div>
 
-          <div className="w-full"></div> {/* Spacer */}
-
-          {/* Right: History */}
-          <button onClick={() => navigate('/history')} className="flex flex-col items-center justify-center w-full h-full gap-1 text-slate-400 dark:text-slate-500 hover:text-primary transition-colors border-none bg-transparent cursor-pointer">
-            <span className="material-symbols-outlined text-[26px]">calendar_month</span>
-            <span className="text-[10px] font-medium">Historial</span>
-          </button>
-        </div>
-      </nav>
 
       {/* Manual Entry Modal */}
       <div className={`fixed inset-0 z-[60] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 ${showModal ? 'visible opacity-100' : 'invisible opacity-0'}`}>
