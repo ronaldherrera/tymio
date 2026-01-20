@@ -149,7 +149,7 @@ const SigninScreen: React.FC = () => {
             <div className="relative group">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                 <span className="material-symbols-outlined text-slate-400 group-focus-within:text-primary transition-colors">
-                  lock
+                  lock_reset
                 </span>
               </div>
               <input

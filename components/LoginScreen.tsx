@@ -14,15 +14,34 @@ const LoginScreen: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
+  const [isRecovering, setIsRecovering] = useState(false);
 
   const canSubmit = useMemo(() => {
+    if (isRecovering) {
+      return email.trim().length > 3 && !loading;
+    }
     return email.trim().length > 3 && password.length >= 6 && !loading;
-  }, [email, password, loading]);
+  }, [email, password, loading, isRecovering]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
     setLoading(true);
+
+    if (isRecovering) {
+      // Usamos solo el origen para evitar doble hash (#/route#token) que rompe a Supabase
+      // App.tsx manejará el evento PASSWORD_RECOVERY y redirigirá a /update-password
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: window.location.origin,
+      });
+      setLoading(false);
+      if (error) {
+        setMessage({ type: "error", text: error.message });
+      } else {
+        setMessage({ type: "success", text: "Si el correo existe, recibirás un enlace." });
+      }
+      return;
+    }
 
     const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
@@ -54,10 +73,12 @@ const LoginScreen: React.FC = () => {
           </div>
           
           <h1 className="text-2xl font-bold tracking-tight text-center text-slate-900 dark:text-white/90">
-            Bienvenido
+            {isRecovering ? "Recuperar contraseña" : "Bienvenido"}
           </h1>
           <p className="text-slate-500 dark:text-[#92a4c9] mt-2 text-center text-sm font-medium">
-            Controla tu tiempo, maximiza tu día
+            {isRecovering 
+              ? "Ingresa tu correo para recibir un enlace de recuperación" 
+              : "Controla tu tiempo, maximiza tu día"}
           </p>
         </div>
 
@@ -83,50 +104,52 @@ const LoginScreen: React.FC = () => {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-semibold text-slate-700 dark:text-white ml-1">
-              Contraseña
-            </label>
-            <div className="relative group">
-              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                <span className="material-symbols-outlined text-slate-400 group-focus-within:text-primary transition-colors">
-                  lock
-                </span>
+          {!isRecovering && (
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-700 dark:text-white ml-1">
+                Contraseña
+              </label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                  <span className="material-symbols-outlined text-slate-400 group-focus-within:text-primary transition-colors">
+                    lock
+                  </span>
+                </div>
+
+                <input
+                  className="block w-full h-14 pl-12 pr-12 rounded-xl border-0 bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] focus:ring-2 focus:ring-inset focus:ring-primary dark:focus:ring-primary sm:text-base sm:leading-6 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#92a4c9] shadow-sm transition-all outline-none"
+                  placeholder="••••••••"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center cursor-pointer text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
+                  aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                >
+                  <span className="material-symbols-outlined text-[20px]">
+                    {showPassword ? "visibility_off" : "visibility"}
+                  </span>
+                </button>
               </div>
-
-              <input
-                className="block w-full h-14 pl-12 pr-12 rounded-xl border-0 bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] focus:ring-2 focus:ring-inset focus:ring-primary dark:focus:ring-primary sm:text-base sm:leading-6 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-[#92a4c9] shadow-sm transition-all outline-none"
-                placeholder="••••••••"
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-              />
-
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                className="absolute inset-y-0 right-0 pr-4 flex items-center cursor-pointer text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
-                aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
-              >
-                <span className="material-symbols-outlined text-[20px]">
-                  {showPassword ? "visibility_off" : "visibility"}
-                </span>
-              </button>
             </div>
-          </div>
+          )}
 
           <div className="flex items-center justify-end">
-            <a
+            <button
+              type="button"
               className="text-sm font-semibold text-primary hover:text-blue-400 transition-colors"
-              href="#"
-              onClick={(e) => {
-                e.preventDefault();
-                setMessage({ type: "error", text: "Recuperación de contraseña la activamos después." });
+              onClick={() => {
+                setIsRecovering(!isRecovering);
+                setMessage(null);
               }}
             >
-              ¿Olvidaste tu contraseña?
-            </a>
+              {isRecovering ? "¿Ya tienes cuenta? Inicia sesión" : "¿Olvidaste tu contraseña?"}
+            </button>
           </div>
 
           {message && (
@@ -147,27 +170,44 @@ const LoginScreen: React.FC = () => {
               disabled={!canSubmit}
               className="w-full h-14 bg-primary hover:bg-blue-600 disabled:opacity-60 text-white font-bold rounded-xl shadow-glow shadow-blue-900/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
             >
-              <span>{loading ? "Entrando..." : "Iniciar Sesión"}</span>
+              <span>{loading ? "Procesando..." : (isRecovering ? "Enviar enlace" : "Iniciar Sesión")}</span>
             </button>
           </div>
         </form>
+        
+        {!isRecovering && (
+          <>
+            <div className="relative py-8 flex items-center gap-4">
+              <div className="h-px bg-slate-200 dark:bg-[#324467] flex-1"></div>
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">O accede con</span>
+              <div className="h-px bg-slate-200 dark:bg-[#324467] flex-1"></div>
+            </div>
 
-        <div className="relative py-8 flex items-center gap-4">
-          <div className="h-px bg-slate-200 dark:bg-[#324467] flex-1"></div>
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">O accede con</span>
-          <div className="h-px bg-slate-200 dark:bg-[#324467] flex-1"></div>
-        </div>
-
-        <div>
-          <button
-            type="button"
-            className="w-full h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group"
-            onClick={() => setMessage({ type: "error", text: "Google login lo configuramos después en Supabase." })}
-          >
-            <div className="w-5 h-5 rounded-full border-4 border-l-blue-500 border-t-red-500 border-r-yellow-400 border-b-green-500 group-hover:rotate-90 transition-transform duration-500"></div>
-            <span className="text-sm font-semibold text-slate-700 dark:text-white">Google</span>
-          </button>
-        </div>
+            <div>
+              <button
+                type="button"
+                disabled={loading}
+                className="w-full h-12 flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-surface-dark ring-1 ring-inset ring-slate-200 dark:ring-[#324467] hover:bg-slate-50 dark:hover:bg-[#202b40] transition-colors group disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={async () => {
+                  setLoading(true);
+                  const { error } = await supabase.auth.signInWithOAuth({
+                    provider: "google",
+                    options: {
+                      redirectTo: window.location.origin + "/dashboard",
+                    },
+                  });
+                  if (error) {
+                     setLoading(false);
+                     setMessage({ type: "error", text: error.message });
+                  }
+                }}
+              >
+                <div className="w-5 h-5 rounded-full border-4 border-l-blue-500 border-t-red-500 border-r-yellow-400 border-b-green-500 group-hover:rotate-90 transition-transform duration-500"></div>
+                <span className="text-sm font-semibold text-slate-700 dark:text-white">Google</span>
+              </button>
+            </div>
+          </>
+        )}
 
         <div className="mt-auto pt-8 pb-4 text-center">
           <p className="text-slate-500 dark:text-[#92a4c9] text-sm font-medium">
