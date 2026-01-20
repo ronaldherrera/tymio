@@ -36,7 +36,7 @@ const App: React.FC = () => {
       setLoadingSession(false);
     });
 
-    // 2. Escuchar cambios (login, logout, refresh)
+// 2. Escuchar cambios (login, logout, refresh)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {

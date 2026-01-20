@@ -5,6 +5,8 @@ import { AppContext } from '../App';
 import { supabase } from '../services/supabase';
 import { DEFAULT_AVATAR } from '../constants';
 import { Logo } from './Logo';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const startOfYear = (d: Date) => {
   const date = new Date(d.getFullYear(), 0, 1);
@@ -57,7 +59,7 @@ const ProfileScreen: React.FC = () => {
     }, 300); // Match animation duration (0.3s)
   };
 
-  const handleExport = async () => {
+  const handleExport = async (format: 'csv' | 'pdf') => {
     try {
       setIsExporting(true);
       if (!user) return;
@@ -113,43 +115,87 @@ const ProfileScreen: React.FC = () => {
         return;
       }
 
-      // Generate CSV
-      // Headers
-      let csvContent = "Fecha,Hora,Descripcion\n";
-      
-      data.forEach((row) => {
-          const d = row.occurred_at ? new Date(row.occurred_at) : new Date(row.created_at);
-          const dateStr = d.toLocaleDateString('es-ES');
-          const timeStr = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+      if (format === 'csv') {
+          // Generate CSV
+          let csvContent = "Fecha,Hora,Descripcion\n";
           
-          let typeLabel = '';
-          // Traducir tipos básicos para fallback
-          if (row.entry_type === 'clock-in') typeLabel = 'Entrada';
-          else if (row.entry_type === 'clock-out') typeLabel = 'Salida';
-          else if (row.entry_type === 'break-start') typeLabel = 'Inicio Descanso';
-          else if (row.entry_type === 'break-end') typeLabel = 'Fin Descanso';
-          else if (row.entry_type === 'others-out') typeLabel = 'Salida (Permiso)';
-          else if (row.entry_type === 'others-in') typeLabel = 'Entrada (Permiso)';
-          else typeLabel = 'Registro';
+          data.forEach((row) => {
+              const d = row.occurred_at ? new Date(row.occurred_at) : new Date(row.created_at);
+              const dateStr = d.toLocaleDateString('es-ES');
+              const timeStr = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+              
+              let typeLabel = '';
+              if (row.entry_type === 'clock-in') typeLabel = 'Entrada';
+              else if (row.entry_type === 'clock-out') typeLabel = 'Salida';
+              else if (row.entry_type === 'break-start') typeLabel = 'Inicio Descanso';
+              else if (row.entry_type === 'break-end') typeLabel = 'Fin Descanso';
+              else if (row.entry_type === 'others-out') typeLabel = 'Salida (Permiso)';
+              else if (row.entry_type === 'others-in') typeLabel = 'Entrada (Permiso)';
+              else typeLabel = 'Registro';
+              
+              let finalDesc = row.description || typeLabel;
+              finalDesc = finalDesc.replace(/,/g, ' '); 
+
+              csvContent += `${dateStr},${timeStr},${finalDesc}\n`;
+          });
+
+          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+          const link = document.createElement("a");
+          const url = URL.createObjectURL(blob);
+          link.setAttribute("href", url);
+          link.setAttribute("download", `${filename}.csv`);
+          link.style.visibility = 'hidden';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+      } else {
+          // Generate PDF
+          const doc = new jsPDF();
           
-          // Lógica de descripción: Usar descripción de usuario si existe, sino el tipo
-          let finalDesc = row.description || typeLabel;
-          // Limpiar comas para CSV
-          finalDesc = finalDesc.replace(/,/g, ' '); 
+          // Header
+          doc.setFontSize(22);
+          doc.setTextColor(30, 41, 59); // Slate 800
+          doc.text("Informe de Registro Horario", 14, 20);
+          
+          doc.setFontSize(10);
+          doc.setTextColor(100, 116, 139); // Slate 500
+          doc.text(`Generado el: ${new Date().toLocaleDateString('es-ES')} ${new Date().toLocaleTimeString('es-ES')}`, 14, 28);
+          doc.text(`Usuario: ${displayName}`, 14, 33);
+          
+          const tableRows: any[] = [];
+          
+          data.forEach((row) => {
+              const d = row.occurred_at ? new Date(row.occurred_at) : new Date(row.created_at);
+              const dateStr = d.toLocaleDateString('es-ES');
+              const timeStr = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+              
+              let typeLabel = '';
+              if (row.entry_type === 'clock-in') typeLabel = 'Entrada';
+              else if (row.entry_type === 'clock-out') typeLabel = 'Salida';
+              else if (row.entry_type === 'break-start') typeLabel = 'Inicio Descanso';
+              else if (row.entry_type === 'break-end') typeLabel = 'Fin Descanso';
+              else if (row.entry_type === 'others-out') typeLabel = 'Salida (Permiso)';
+              else if (row.entry_type === 'others-in') typeLabel = 'Entrada (Permiso)';
+              else typeLabel = 'Registro';
+              
+              const finalDesc = row.description || typeLabel;
+              
+              tableRows.push([dateStr, timeStr, finalDesc]);
+          });
 
-          csvContent += `${dateStr},${timeStr},${finalDesc}\n`;
-      });
-
-      // Download
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(blob);
-      link.setAttribute("href", url);
-      link.setAttribute("download", `${filename}.csv`);
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+          autoTable(doc, {
+            head: [['Fecha', 'Hora', 'Descripción']],
+            body: tableRows,
+            startY: 40,
+            theme: 'grid',
+            headStyles: { fillColor: [19, 91, 236], textColor: 255 }, // Primary Blue
+            styles: { fontSize: 10, cellPadding: 4 },
+            alternateRowStyles: { fillColor: [248, 250, 252] }
+          });
+          
+          doc.save(`${filename}.pdf`);
+      }
 
       setMessage({ type: 'success', text: 'Informe descargado correctamente' });
       setShowExportModal(false);
@@ -354,7 +400,7 @@ const ProfileScreen: React.FC = () => {
 
 
   return (
-    <div className={`${isExiting ? 'animate-slideOutRight' : 'animate-slideInRight'} relative flex h-full min-h-screen w-full flex-col overflow-x-hidden max-w-md mx-auto shadow-2xl bg-background-light dark:bg-background-dark pb-32`}>
+    <div className="bg-background-light dark:bg-background-dark text-slate-900 dark:text-white font-display overflow-x-hidden min-h-screen flex flex-col max-w-md mx-auto relative shadow-2xl pb-32">
       <div className="sticky top-0 z-50 flex items-center bg-background-light dark:bg-background-dark p-4 pb-2 justify-between border-b dark:border-border-dark/30 border-gray-200">
         <div onClick={handleBack} className="flex size-12 shrink-0 items-center justify-start text-slate-900 dark:text-white cursor-pointer hover:opacity-70 transition-opacity">
           <span className="material-symbols-outlined text-[24px]">arrow_back_ios_new</span>
@@ -365,7 +411,7 @@ const ProfileScreen: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="w-full">
         <div className="flex p-4 flex-col items-center pt-8">
           <div className="relative group cursor-pointer">
             <div 
@@ -594,23 +640,37 @@ const ProfileScreen: React.FC = () => {
                   </div>
               </div>
 
-              <button 
-                onClick={handleExport}
-                disabled={isExporting}
-                className="w-full py-3.5 px-4 rounded-xl font-bold text-white bg-slate-900 dark:bg-white dark:text-black hover:opacity-90 transition-all flex items-center justify-center gap-2 border-none cursor-pointer disabled:opacity-50"
-              >
-                 {isExporting ? (
-                    <>
-                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                       <span>Generando...</span>
-                    </>
-                 ) : (
-                    <>
-                       <span className="material-symbols-outlined">download</span>
-                       <span>Descargar Excel (CSV)</span>
-                    </>
-                 )}
-              </button>
+              <div className="flex gap-3">
+                  <button 
+                    onClick={() => handleExport('csv')}
+                    disabled={isExporting}
+                    className="flex-1 py-3.5 px-4 rounded-xl font-bold text-white bg-green-600 hover:bg-green-700 transition-all flex items-center justify-center gap-2 border-none cursor-pointer disabled:opacity-50 shadow-lg shadow-green-600/20"
+                  >
+                     {isExporting ? (
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                     ) : (
+                        <>
+                           <span className="material-symbols-outlined">table_view</span>
+                           <span>Excel</span>
+                        </>
+                     )}
+                  </button>
+
+                  <button 
+                    onClick={() => handleExport('pdf')}
+                    disabled={isExporting}
+                    className="flex-1 py-3.5 px-4 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 transition-all flex items-center justify-center gap-2 border-none cursor-pointer disabled:opacity-50 shadow-lg shadow-red-600/20"
+                  >
+                     {isExporting ? (
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                     ) : (
+                        <>
+                           <span className="material-symbols-outlined">picture_as_pdf</span>
+                           <span>PDF</span>
+                        </>
+                     )}
+                  </button>
+              </div>
            </div>
         </div>
       </div>
