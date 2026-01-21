@@ -57,7 +57,7 @@ const SigninScreen: React.FC = () => {
         <div className="flex flex-col items-center justify-center py-8">
           <div className="flex items-center gap-4 mb-8 transform hover:scale-105 transition-transform duration-300">
              <Logo className="h-12 w-12 drop-shadow-xl" />
-             <span className="text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-none">Tymio</span>
+             <span className="text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-none">Fycheo</span>
           </div>
 
           <h1 className="text-2xl font-bold tracking-tight text-center text-slate-900 dark:text-white/90">
@@ -161,10 +161,12 @@ const SigninScreen: React.FC = () => {
                 autoComplete="new-password"
               />
             </div>
-            {confirm.length > 0 && confirm !== password && (
-              <div className="flex items-center gap-1 text-red-500 pl-1 animate-in fade-in slide-in-from-top-1">
-                  <span className="material-symbols-outlined text-[16px]">error</span>
-                  <span className="text-xs font-bold">Las contraseñas no coinciden</span>
+            {confirm && (
+              <div className={`flex items-center gap-1.5 mt-2 text-xs font-medium transition-colors ${password === confirm ? 'text-emerald-500' : 'text-red-500'}`}>
+                  <span className="material-symbols-outlined text-[14px]">
+                      {password === confirm ? 'check_circle' : 'cancel'}
+                  </span>
+                  {password === confirm ? 'Las contraseñas coinciden' : 'Las contraseñas no coinciden'}
               </div>
             )}
           </div>

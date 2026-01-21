@@ -69,7 +69,7 @@ const LoginScreen: React.FC = () => {
         <div className="flex flex-col items-center justify-center py-8">
           <div className="flex items-center gap-4 mb-8 transform hover:scale-105 transition-transform duration-300">
              <Logo className="h-12 w-12 drop-shadow-xl" />
-             <span className="text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-none">Tymio</span>
+             <span className="text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-none">Fycheo</span>
           </div>
           
           <h1 className="text-2xl font-bold tracking-tight text-center text-slate-900 dark:text-white/90">

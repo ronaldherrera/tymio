@@ -46,7 +46,7 @@ const UpdatePasswordScreen: React.FC = () => {
                 <div className="flex flex-col items-center justify-center py-8">
                      <div className="flex items-center gap-4 mb-8">
                          <Logo className="h-12 w-12 drop-shadow-xl" />
-                         <span className="text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-none">Tymio</span>
+                         <span className="text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-none">Fycheo</span>
                       </div>
                     <h1 className="text-2xl font-bold tracking-tight text-center text-slate-900 dark:text-white/90">
                         Restablecer Contraseña
@@ -124,10 +124,12 @@ const UpdatePasswordScreen: React.FC = () => {
                                 onChange={(e) => setConfirmPassword(e.target.value)}
                             />
                         </div>
-                        {confirmPassword.length > 0 && confirmPassword !== password && (
-                          <div className="flex items-center gap-1 text-red-500 pl-1 animate-in fade-in slide-in-from-top-1">
-                              <span className="material-symbols-outlined text-[16px]">error</span>
-                              <span className="text-xs font-bold">Las contraseñas no coinciden</span>
+                        {confirmPassword && (
+                          <div className={`flex items-center gap-1.5 mt-2 text-xs font-medium transition-colors ${password === confirmPassword ? 'text-emerald-500' : 'text-red-500'}`}>
+                              <span className="material-symbols-outlined text-[14px]">
+                                  {password === confirmPassword ? 'check_circle' : 'cancel'}
+                              </span>
+                              {password === confirmPassword ? 'Las contraseñas coinciden' : 'Las contraseñas no coinciden'}
                           </div>
                         )}
                     </div>

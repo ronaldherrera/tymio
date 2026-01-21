@@ -1055,7 +1055,7 @@ const DashboardScreen: React.FC = () => {
         {/* Centro: Título App */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pt-2">
            <h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
-            Tymio
+            Fycheo
           </h2>
         </div>
 

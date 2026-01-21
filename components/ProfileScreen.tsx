@@ -49,6 +49,53 @@ const ProfileScreen: React.FC = () => {
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
 
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [currentPasswordValid, setCurrentPasswordValid] = useState<boolean | null>(null);
+  const [validatingCurrent, setValidatingCurrent] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
+
+  // Password Requirements
+  const passwordRequirements = [
+    { id: 'length', text: 'Mín. 8 caracteres', valid: newPassword.length >= 8 },
+    { id: 'number', text: 'Un número', valid: /\d/.test(newPassword) },
+    { id: 'uppercase', text: 'Una mayúscula', valid: /[A-Z]/.test(newPassword) },
+  ];
+
+  // Debounced Current Password Validation
+  useEffect(() => {
+    const validateCurrentPassword = async () => {
+        if (!currentPassword) {
+            setCurrentPasswordValid(null);
+            setValidatingCurrent(false);
+            return;
+        }
+
+        setValidatingCurrent(true);
+        // Delay to avoid spamming API
+        const timer = setTimeout(async () => {
+            try {
+                const { error } = await supabase.auth.signInWithPassword({
+                    email: user.email!,
+                    password: currentPassword
+                });
+                setCurrentPasswordValid(!error);
+            } catch (e) {
+                setCurrentPasswordValid(false);
+            } finally {
+                setValidatingCurrent(false);
+            }
+        }, 800);
+
+        return () => clearTimeout(timer);
+    };
+
+    validateCurrentPassword();
+  }, [currentPassword, user.email]);
+
   // Animation State
   const [isExiting, setIsExiting] = useState(false);
 
@@ -57,6 +104,58 @@ const ProfileScreen: React.FC = () => {
     setTimeout(() => {
       navigate('/dashboard');
     }, 300); // Match animation duration (0.3s)
+  };
+
+  const handleUpdatePassword = async () => {
+      if (!currentPassword || !newPassword || !confirmPassword) {
+          setMessage({ type: 'error', text: 'Por favor, rellena todos los campos' });
+          return;
+      }
+      
+      // Verify requirements
+      const isLengthValid = newPassword.length >= 8;
+      const hasNumber = /\d/.test(newPassword);
+      const hasUpper = /[A-Z]/.test(newPassword);
+
+      if (!isLengthValid || !hasNumber || !hasUpper) {
+          setMessage({ type: 'error', text: 'La contraseña no cumple los requisitos' });
+          return;
+      }
+
+      if (newPassword !== confirmPassword) {
+          setMessage({ type: 'error', text: 'Las contraseñas nuevas no coinciden' });
+          return;
+      }
+
+      try {
+          setPasswordLoading(true);
+
+          // 1. Verify Current Password
+          const { error: signInError } = await supabase.auth.signInWithPassword({
+              email: user.email!,
+              password: currentPassword
+          });
+
+          if (signInError) {
+             throw new Error("La contraseña actual es incorrecta");
+          }
+
+          // 2. Update Password
+          const { error } = await supabase.auth.updateUser({ password: newPassword });
+          
+          if (error) throw error;
+          
+          setMessage({ type: 'success', text: 'Contraseña actualizada correctamente' });
+          setShowPasswordModal(false);
+          setCurrentPassword('');
+          setNewPassword('');
+          setConfirmPassword('');
+      } catch (error: any) {
+          console.error("Error updating password:", error);
+          setMessage({ type: 'error', text: error.message || 'Error al actualizar contraseña' });
+      } finally {
+          setPasswordLoading(false);
+      }
   };
 
   const handleExport = async (format: 'csv' | 'pdf') => {
@@ -115,6 +214,26 @@ const ProfileScreen: React.FC = () => {
         return;
       }
 
+      // Generate standardized filename
+      const formatDateFile = (d: Date) => {
+          const day = String(d.getDate()).padStart(2, '0');
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const year = d.getFullYear();
+          return `${day}-${month}-${year}`;
+      };
+      
+      let cleanName = 'Usuario';
+      if (user.user_metadata?.full_name) {
+          const parts = user.user_metadata.full_name.trim().split(/\s+/);
+          if (parts.length >= 2) cleanName = `${parts[0]}_${parts[1]}`;
+          else if (parts.length === 1) cleanName = parts[0];
+      } else if (user.email) {
+          cleanName = user.email.split('@')[0];
+      }
+      cleanName = cleanName.replace(/[^a-zA-Z0-9_\-\.]/g, '');
+      
+      const finalFilename = `Registros_${cleanName}_${formatDateFile(start)}_${formatDateFile(end)}`;
+
       if (format === 'csv') {
           // Generate CSV
           let csvContent = "Fecha,Hora,Descripcion\n";
@@ -143,7 +262,7 @@ const ProfileScreen: React.FC = () => {
           const link = document.createElement("a");
           const url = URL.createObjectURL(blob);
           link.setAttribute("href", url);
-          link.setAttribute("download", `${filename}.csv`);
+          link.setAttribute("download", `${finalFilename}.csv`);
           link.style.visibility = 'hidden';
           document.body.appendChild(link);
           link.click();
@@ -153,19 +272,194 @@ const ProfileScreen: React.FC = () => {
           // Generate PDF
           const doc = new jsPDF();
           
-          // Header
-          doc.setFontSize(22);
+          // Helper to load image
+          const getImageData = (url: string) => {
+              return new Promise<{ data: string; w: number; h: number }>((resolve, reject) => {
+                  const img = new Image();
+                  img.setAttribute('crossOrigin', 'anonymous');
+                  img.onload = () => {
+                      const canvas = document.createElement('canvas');
+                      canvas.width = img.width;
+                      canvas.height = img.height;
+                      const ctx = canvas.getContext('2d');
+                      if (ctx) {
+                          ctx.drawImage(img, 0, 0);
+                          resolve({
+                              data: canvas.toDataURL('image/png'),
+                              w: img.width,
+                              h: img.height
+                          });
+                      } else {
+                          reject(new Error('Canvas context failed'));
+                      }
+                  };
+                  img.onerror = reject;
+                  img.src = url;
+              });
+          };
+
+          try {
+              // Try to load logo
+              const logoUrl = new URL('../recursos/logo-mail.png', import.meta.url).href;
+              const imgProps = await getImageData(logoUrl);
+              
+              // Scale logo preserving aspect ratio
+              const logoHeight = 12; 
+              const ratio = imgProps.w / imgProps.h;
+              const logoWidth = logoHeight * ratio;
+              
+              doc.addImage(imgProps.data, 'PNG', 14, 12, logoWidth, logoHeight);
+          } catch (e) {
+              console.error("Logo load failed", e);
+              doc.setFontSize(26);
+              doc.setTextColor(19, 91, 236);
+              doc.setFont("helvetica", "bold");
+              doc.text("Fycheo", 14, 20);
+          }
+
+          // Report Title (Aligned with logo bottom or slightly below)
+          doc.setFontSize(12);
+          doc.setTextColor(100, 116, 139); // Slate 500
+          doc.setFont("helvetica", "normal");
+          doc.text("Informe de Registro Horario", 14, 30); // Pushed down slightly
+
+          // Divider
+          doc.setDrawColor(226, 232, 240); // Slate 200
+          doc.setLineWidth(0.5);
+          doc.line(14, 35, 196, 35); // Pushed down
+
+          // User Info & Period
+          doc.setFontSize(10);
           doc.setTextColor(30, 41, 59); // Slate 800
-          doc.text("Informe de Registro Horario", 14, 20);
+          doc.setFont("helvetica", "bold");
+          doc.text("Empleado:", 14, 45);
+          doc.text("Email:", 14, 51);
+          doc.text("Periodo:", 120, 45);
+          doc.text("Generado:", 120, 51);
+
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(71, 85, 105); // Slate 600
+          const userNameLabel = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Usuario';
+          doc.text(userNameLabel, 35, 45);
+          doc.text(user.email || '', 35, 51);
+          
+          const startDateStr = start.toLocaleDateString('es-ES');
+          const endDateStr = end.toLocaleDateString('es-ES');
+          doc.text(`${startDateStr} - ${endDateStr}`, 140, 45);
+          doc.text(new Date().toLocaleString('es-ES'), 140, 51);
+
+
+          // --- 2. Calculate Stats for Chart ---
+          let w = 0, b = 0, o = 0;
+          let lastState = 'out';
+          let lastTime = 0;
+
+          data.forEach((e) => {
+             const eTime = e.occurred_at ? new Date(e.occurred_at).getTime() : new Date(e.created_at).getTime();
+             if (lastTime > 0) {
+                const diffMins = Math.floor((eTime - lastTime) / 1000 / 60);
+                if (diffMins > 0 && diffMins < 960) {
+                    if (lastState === 'working') w += diffMins;
+                    else if (lastState === 'break') b += diffMins;
+                    else if (lastState === 'others') o += diffMins;
+                }
+             }
+             const t = (e.entry_type || '').toLowerCase();
+             if (t === 'clock-in') lastState = 'working';
+             else if (t === 'break-start') lastState = 'break';
+             else if (t === 'break-end') lastState = 'working';
+             else if (t === 'others-out') lastState = 'others';
+             else if (t === 'others-in') lastState = 'working';
+             else if (t === 'clock-out') lastState = 'out';
+             lastTime = eTime;
+          });
+
+          // --- 3. Legend & Stats (Top Row) ---
+          const topRowY = 60;
+          
+          const minutesToLabel = (m: number) => {
+             const h = Math.floor(m / 60);
+             const mins = m % 60;
+             return `${h}h ${mins}m`;
+          };
+
+          const drawLegendItem = (x: number, label: string, valueMins: number, color: number[]) => {
+              doc.setFillColor(color[0], color[1], color[2]);
+              doc.circle(x, topRowY - 1, 1.2, 'F'); 
+              
+              doc.setFontSize(8);
+              doc.setTextColor(30, 41, 59);
+              doc.setFont("helvetica", "bold");
+              doc.text(label, x + 3, topRowY);
+              
+              doc.setFont("helvetica", "normal");
+              const labelWidth = doc.getTextWidth(label);
+              const valText = minutesToLabel(valueMins);
+              const valWidth = doc.getTextWidth(valText);
+              
+              const valX = x + 3 + labelWidth + 2;
+              doc.text(valText, valX, topRowY);
+              
+              // Return total width used + gap
+              return (valX + valWidth - x) + 8; // 8 is the gap to next item
+          };
+          
+          // Position Legend Items (Dynamic Layout)
+          let currentLegendX = 14;
+          
+          // Working
+          currentLegendX += drawLegendItem(currentLegendX, "Trabajando", w, [59, 130, 246]);
+          // Break
+          currentLegendX += drawLegendItem(currentLegendX, "Descanso", b, [245, 158, 11]);
+          // Others
+          drawLegendItem(currentLegendX, "Otros/Permisos", o, [236, 72, 153]);
+
+          // Total (Right Aligned)
+          const totalMins = w + b + o;
+          const totalHours = Math.floor(totalMins / 60);
+          const totalMinutes = totalMins % 60;
+          const totalLabel = `${totalHours}h ${totalMinutes}m`;
           
           doc.setFontSize(10);
-          doc.setTextColor(100, 116, 139); // Slate 500
-          doc.text(`Generado el: ${new Date().toLocaleDateString('es-ES')} ${new Date().toLocaleTimeString('es-ES')}`, 14, 28);
-          doc.text(`Usuario: ${displayName}`, 14, 33);
+          doc.setTextColor(30, 41, 59);
+          doc.setFont("helvetica", "bold");
+          doc.text(`Total: ${totalLabel}`, 196, topRowY, { align: 'right' });
+
+
+          // --- 4. Horizontal Bar Chart ---
+          const barX = 14;
+          const barY = 66; // Below Legend
+          const barWidth = 182; 
+          const barHeight = 6; 
+          
+          let currentX = barX;
+          if (totalMins > 0) {
+              const slices = [
+                  { value: w, color: [59, 130, 246] }, // Working: #3b82f6
+                  { value: b, color: [245, 158, 11] }, // Break: #f59e0b
+                  { value: o, color: [236, 72, 153] }  // Others: #ec4899
+              ];
+              
+              slices.forEach(slice => {
+                  if (slice.value <= 0) return;
+                  const percent = slice.value / totalMins;
+                  const sliceWidth = percent * barWidth;
+                  
+                  doc.setFillColor(slice.color[0], slice.color[1], slice.color[2]);
+                  doc.rect(currentX, barY, sliceWidth, barHeight, 'F');
+                  currentX += sliceWidth;
+              });
+          } else {
+             doc.setFillColor(226, 232, 240);
+             doc.rect(barX, barY, barWidth, barHeight, 'F');
+          }
+
+
+          // --- 6. Table ---
           
           const tableRows: any[] = [];
           
-          data.forEach((row) => {
+          data.forEach((row, index) => {
               const d = row.occurred_at ? new Date(row.occurred_at) : new Date(row.created_at);
               const dateStr = d.toLocaleDateString('es-ES');
               const timeStr = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
@@ -181,20 +475,86 @@ const ProfileScreen: React.FC = () => {
               
               const finalDesc = row.description || typeLabel;
               
-              tableRows.push([dateStr, timeStr, finalDesc]);
+              // Duration calculation
+              let durationLabel = '-';
+              if (index < data.length - 1) {
+                   const currentMs = d.getTime();
+                   const nextRow = data[index + 1];
+                   const nextMs = nextRow.occurred_at ? new Date(nextRow.occurred_at).getTime() : new Date(nextRow.created_at).getTime();
+                   const diffMs = nextMs - currentMs;
+                   if (diffMs > 0) {
+                       const h = Math.floor(diffMs / (1000 * 60 * 60));
+                       const m = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                       if (h > 0 || m > 0) durationLabel = `${h}h ${m}m`;
+                   }
+              }
+
+              tableRows.push([dateStr, timeStr, finalDesc, durationLabel]);
           });
 
           autoTable(doc, {
-            head: [['Fecha', 'Hora', 'Descripción']],
+            head: [['Fecha', 'Hora', 'Descripción', 'Tiempo']],
             body: tableRows,
-            startY: 40,
+            startY: 78,
             theme: 'grid',
-            headStyles: { fillColor: [19, 91, 236], textColor: 255 }, // Primary Blue
-            styles: { fontSize: 10, cellPadding: 4 },
-            alternateRowStyles: { fillColor: [248, 250, 252] }
+            headStyles: { fillColor: [19, 91, 236], textColor: 255 },
+            styles: { fontSize: 9, cellPadding: 3, valign: 'middle' },
+            alternateRowStyles: { fillColor: [248, 250, 252] },
+            columnStyles: {
+                0: { cellWidth: 30 },
+                1: { cellWidth: 20 },
+                3: { cellWidth: 30, halign: 'center' }
+            },
+            willDrawCell: (data) => {
+                if (data.section === 'body' && data.column.index === 3) {
+                     const text = data.cell.raw as string;
+                     if (text && text !== '-') {
+                         const desc = (data.row.raw as string[])[2].toLowerCase();
+                         
+                         let tagColor: number[] | null = null;
+                         
+                         if (desc.includes('entrada') || desc.includes('fin descanso') || desc.includes('others-in')) {
+                              tagColor = [59, 130, 246]; // Blue (Working)
+                         } else if (desc.includes('inicio descanso')) {
+                              tagColor = [245, 158, 11]; // Orange (Break)
+                         } else if (desc.includes('permiso') || desc.includes('others-out')) {
+                              tagColor = [236, 72, 153]; // Pink (Others)
+                         } else {
+                              // Default (e.g. Salida trabajo): No tag, plain text
+                              return; 
+                         }
+
+                         if (tagColor) {
+                             doc.setFillColor(tagColor[0], tagColor[1], tagColor[2]);
+                             const boxWidth = 24;
+                             const boxHeight = 6;
+                             const x = data.cell.x + (data.cell.width - boxWidth) / 2;
+                             const y = data.cell.y + (data.cell.height - boxHeight) / 2;
+                             
+                             doc.roundedRect(x, y, boxWidth, boxHeight, 1, 1, 'F');
+                             
+                             // Set text to white for tagged cells
+                             doc.setTextColor(255, 255, 255);
+                             doc.setFont("helvetica", "bold");
+                         }
+                     }
+                }
+            },
+            didDrawCell: (data) => {
+            }
           });
+
+          // --- 7. Add Page Numbers (Footer) ---
+          const pageCount = doc.getNumberOfPages();
+          for (let i = 1; i <= pageCount; i++) {
+              doc.setPage(i);
+              doc.setFontSize(9);
+              doc.setTextColor(100, 116, 139); // Slate 500
+              doc.text(`Página ${i} de ${pageCount}`, 105, 290, { align: 'center' });
+          }
           
-          doc.save(`${filename}.pdf`);
+          // Construct Filename using standardized variable
+          doc.save(`${finalFilename}.pdf`);
       }
 
       setMessage({ type: 'success', text: 'Informe descargado correctamente' });
@@ -675,25 +1035,142 @@ const ProfileScreen: React.FC = () => {
         </div>
       </div>
 
-        <div className="mt-6">
-          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Seguridad</h3>
-          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50 divide-y divide-gray-100 dark:divide-border-dark/50">
-            <button className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer">
-              <div className="flex items-center gap-3">
-                <div className="size-8 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500">
-                  <span className="material-symbols-outlined text-[20px]">password</span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-slate-900 dark:text-white font-medium text-base">Cambiar Contraseña</span>
-                  <span className="text-xs text-text-secondary">Actualizar clave de acceso</span>
-                </div>
-              </div>
-              <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+      {/* Password Change Modal */}
+      <div className={`fixed inset-0 z-[60] flex items-end justify-center sm:items-center p-0 sm:p-4 transition-all duration-200 ${showPasswordModal ? 'visible opacity-100' : 'invisible opacity-0'}`}>
+        <div onClick={() => setShowPasswordModal(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div className={`relative w-full max-w-md bg-white dark:bg-surface-dark rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden transition-transform duration-300 ease-out ${showPasswordModal ? 'translate-y-0' : 'translate-y-full'}`}>
+          <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Cambiar Contraseña</h3>
+            <button onClick={() => setShowPasswordModal(false)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-500 border-none bg-transparent cursor-pointer">
+              <span className="material-symbols-outlined">close</span>
             </button>
-
-
           </div>
+          
+          <form 
+            className="p-6 space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleUpdatePassword();
+            }}
+          >
+             {/* Current Password */}
+             <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Contraseña Actual</label>
+                <div className="relative">
+                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">key</span>
+                    <input 
+                      type={showPasswords ? "text" : "password"}
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-900/50 border ${currentPasswordValid === false ? 'border-red-500 focus:border-red-500' : 'border-gray-200 dark:border-gray-800 focus:border-primary'} focus:ring-2 focus:ring-primary/20 outline-none transition-all dark:text-white`}
+                      placeholder="Tu clave actual"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      autoComplete="current-password"
+                    />
+                </div>
+                {/* Real-time Validation Feedback */}
+                {currentPassword && (
+                    <div className="mt-2 h-4 text-xs font-medium flex items-center gap-1.5 transition-colors">
+                        {validatingCurrent ? (
+                            <div className="flex items-center gap-2 text-gray-400">
+                                <div className="w-3 h-3 border-2 border-gray-300 border-t-primary rounded-full animate-spin"></div>
+                                Verificando...
+                            </div>
+                        ) : currentPasswordValid === true ? (
+                            <div className="text-green-500 flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-[14px]">check_circle</span>
+                                Contraseña correcta
+                            </div>
+                        ) : currentPasswordValid === false ? (
+                            <div className="text-red-500 flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-[14px]">cancel</span>
+                                Contraseña incorrecta
+                            </div>
+                        ) : null}
+                    </div>
+                )}
+             </div>
+
+             <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Nueva Contraseña</label>
+                <div className="relative">
+                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">lock</span>
+                    <input 
+                      type={showPasswords ? "text" : "password"}
+                      className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all dark:text-white"
+                      placeholder="Nueva clave segura"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      autoComplete="new-password"
+                    />
+                </div>
+                {/* Visual Checklist */}
+                <div className="flex flex-wrap gap-3 mt-2">
+                    {passwordRequirements.map(req => (
+                        <div key={req.id} className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${req.valid ? 'text-green-500' : 'text-gray-400'}`}>
+                            <span className="material-symbols-outlined text-[14px]">
+                                {req.valid ? 'check_circle' : 'radio_button_unchecked'}
+                            </span>
+                            {req.text}
+                        </div>
+                    ))}
+                </div>
+             </div>
+
+             <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Confirmar Contraseña</label>
+                <div className="relative">
+                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">lock_reset</span>
+                    <input 
+                      type={showPasswords ? "text" : "password"}
+                      className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all dark:text-white"
+                      placeholder="Repite la nueva clave"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      autoComplete="new-password"
+                    />
+                </div>
+                {confirmPassword && (
+                    <div className={`flex items-center gap-1.5 mt-2 text-xs font-medium transition-colors ${newPassword === confirmPassword ? 'text-green-500' : 'text-red-500'}`}>
+                        <span className="material-symbols-outlined text-[14px]">
+                            {newPassword === confirmPassword ? 'check_circle' : 'cancel'}
+                        </span>
+                        {newPassword === confirmPassword ? 'Las contraseñas coinciden' : 'Las contraseñas no coinciden'}
+                    </div>
+                )}
+             </div>
+
+             <div className="flex items-center gap-3 mt-4">
+                 <button 
+                    type="button"
+                    onClick={() => setShowPasswords(!showPasswords)}
+                    className="p-3.5 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors border-none cursor-pointer flex items-center justify-center shrink-0"
+                    title={showPasswords ? "Ocultar contraseñas" : "Mostrar contraseñas"}
+                 >
+                    <span className="material-symbols-outlined text-[24px]">
+                       {showPasswords ? 'visibility' : 'visibility_off'}
+                    </span>
+                 </button>
+
+                 <button 
+                    type="submit"
+                    disabled={passwordLoading}
+                    className="flex-1 py-3.5 rounded-xl bg-primary text-white font-bold text-base shadow-lg shadow-primary/25 hover:bg-primary/90 active:scale-[0.98] transition-all disabled:opacity-70 border-none cursor-pointer flex items-center justify-center gap-2"
+                 >
+                    {passwordLoading ? (
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    ) : (
+                      <>
+                        <span className="material-symbols-outlined">save</span>
+                        Guardar Cambios
+                      </>
+                    )}
+                 </button>
+             </div>
+          </form>
         </div>
+      </div>
+
+
 
         <div className="mt-6">
           <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Resumen Anual</h3>
@@ -792,6 +1269,27 @@ const ProfileScreen: React.FC = () => {
                 <div className="flex flex-col">
                   <span className="text-slate-900 dark:text-white font-medium text-base">Vincular Empresa</span>
                   <span className="text-xs text-text-secondary">Conectar con un espacio de trabajo</span>
+                </div>
+              </div>
+              <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Seguridad</h3>
+          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50 divide-y divide-gray-100 dark:divide-border-dark/50">
+            <button 
+              onClick={() => setShowPasswordModal(true)}
+              className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <div className="size-8 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500">
+                  <span className="material-symbols-outlined text-[20px]">password</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-slate-900 dark:text-white font-medium text-base">Cambiar Contraseña</span>
+                  <span className="text-xs text-text-secondary">Actualizar clave de acceso</span>
                 </div>
               </div>
               <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
